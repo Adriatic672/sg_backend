@@ -4,9 +4,10 @@
   "description": "",
   "main": "app.ts",
   "scripts": {
-    "start": "ts-node src/app.ts",
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "tsc",
+    "start": "npm run build && node dist/app.js",
     "dev": "nodemon --exec ts-node src/app.ts",
+    "test": "echo \"Error: no test specified\" && exit 1",
     "test:tiktok": "ts-node src/tests/tiktok-analytics.test.ts",
     "test:tiktok-simple": "node run-tiktok-test.js",
     "test:tiktok-posts": "ts-node src/tests/tiktok-posts.test.ts",

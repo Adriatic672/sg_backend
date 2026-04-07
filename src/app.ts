@@ -67,8 +67,10 @@ import social from './controllers/social';
 // Import WebSocket initializer
 import initializeWebSocket from './controllers/ws';
 
-import Test from './tests/index';
-new Test();
+if (process.env.NODE_ENV !== 'production') {
+    import Test from './tests/index';
+    new Test();
+}
 new CronService()
 
 dotenv.config();

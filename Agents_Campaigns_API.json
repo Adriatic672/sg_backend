@@ -1,0 +1,216 @@
+{
+  "info": {
+    "name": "SocialGems - Agent Campaign Management",
+    "description": "Agent campaign creation and management endpoints",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Agent Campaign Endpoints",
+      "item": [
+        {
+          "name": "Create Campaign as Agent",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{agent_jwt}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"role\": \"agent\",\n  \"agentId\": \"{{agent_id}}\",\n  \"business_id\": \"b123...\",\n  \"title\": \"Summer Sale Campaign\",\n  \"description\": \"This is a comprehensive campaign for our summer collection. We are looking for influencers who can create engaging content about our latest products. The campaign will run for 2 weeks and we need creative, authentic content that resonates with our target audience. We value quality over quantity.\",\n  \"objective\": \"brand_awareness\",\n  \"start_date\": \"2025-11-01\",\n  \"end_date\": \"2025-11-15\",\n  \"budget\": 5000,\n  \"number_of_influencers\": 10,\n  \"campaign_image\": \"https://example.com/image.jpg\",\n  \"tasks\": [\n    {\n      \"task\": \"Instagram Post\",\n      \"description\": \"Create an Instagram post featuring our products\",\n      \"site_id\": 4,\n      \"is_repetitive\": \"no\",\n      \"requires_url\": \"yes\"\n    },\n    {\n      \"task\": \"TikTok Video\",\n      \"description\": \"Create a short TikTok video\",\n      \"site_id\": 2,\n      \"is_repetitive\": \"no\",\n      \"requires_url\": \"yes\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/campaigns/create-draft",
+              "host": ["{{base_url}}"],
+              "path": ["campaigns", "create-draft"]
+            },
+            "description": "Agent creates a campaign on behalf of a business. Agent must be assigned to the business."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Agent Campaigns",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{agent_jwt}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/agents/campaigns",
+              "host": ["{{base_url}}"],
+              "path": ["agents", "campaigns"]
+            },
+            "description": "Get all campaigns created by the agent"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Agent Campaigns - Filtered by Business",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{agent_jwt}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/agents/campaigns?business_id=b123...&status=active",
+              "host": ["{{base_url}}"],
+              "path": ["agents", "campaigns"],
+              "query": [
+                {
+                  "key": "business_id",
+                  "value": "b123..."
+                },
+                {
+                  "key": "status",
+                  "value": "active"
+                }
+              ]
+            },
+            "description": "Get agent campaigns filtered by business and/or status"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Business Campaigns (Agent Access)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{agent_jwt}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/agents/businesses/:businessId/campaigns",
+              "host": ["{{base_url}}"],
+              "path": ["agents", "businesses", ":businessId", "campaigns"],
+              "variable": [
+                {
+                  "key": "businessId",
+                  "value": "b123..."
+                }
+              ]
+            },
+            "description": "Get all campaigns for a specific business (agent must have access to the business)"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Staff Campaign Endpoints",
+      "item": [
+        {
+          "name": "Create Campaign as Staff",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{staff_jwt}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"role\": \"staff\",\n  \"staffId\": \"{{staff_id}}\",\n  \"title\": \"Holiday Campaign\",\n  \"description\": \"This is a comprehensive campaign for our holiday collection. We are looking for influencers who can create engaging content about our latest products. The campaign will run for 2 weeks and we need creative, authentic content that resonates with our target audience. We value quality over quantity.\",\n  \"objective\": \"sales\",\n  \"start_date\": \"2025-12-01\",\n  \"end_date\": \"2025-12-15\",\n  \"budget\": 3000,\n  \"number_of_influencers\": 5,\n  \"campaign_image\": \"https://example.com/holiday.jpg\",\n  \"tasks\": [\n    {\n      \"task\": \"Instagram Reel\",\n      \"description\": \"Create an Instagram reel\",\n      \"site_id\": 4,\n      \"is_repetitive\": \"no\",\n      \"requires_url\": \"yes\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/campaigns/create-draft",
+              "host": ["{{base_url}}"],
+              "path": ["campaigns", "create-draft"]
+            },
+            "description": "Staff creates a campaign for their business. Business ID is auto-determined from staff record."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Brand Campaign Endpoints",
+      "item": [
+        {
+          "name": "Create Campaign as Brand",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{brand_jwt}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"role\": \"brand\",\n  \"userId\": \"{{user_id}}\",\n  \"title\": \"Brand Campaign\",\n  \"description\": \"This is a comprehensive campaign for our brand. We are looking for influencers who can create engaging content about our latest products. The campaign will run for 2 weeks and we need creative, authentic content that resonates with our target audience. We value quality over quantity.\",\n  \"objective\": \"engagement\",\n  \"start_date\": \"2025-11-10\",\n  \"end_date\": \"2025-11-25\",\n  \"budget\": 10000,\n  \"number_of_influencers\": 20,\n  \"campaign_image\": \"https://example.com/brand.jpg\",\n  \"tasks\": [\n    {\n      \"task\": \"Instagram Post\",\n      \"description\": \"Create an Instagram post\",\n      \"site_id\": 4,\n      \"is_repetitive\": \"no\",\n      \"requires_url\": \"yes\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/campaigns/create-draft",
+              "host": ["{{base_url}}"],
+              "path": ["campaigns", "create-draft"]
+            },
+            "description": "Brand owner creates a campaign. Uses userId as business_id."
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:3005",
+      "type": "string"
+    },
+    {
+      "key": "agent_jwt",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "staff_jwt",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "brand_jwt",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "agent_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "staff_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "user_id",
+      "value": "",
+      "type": "string"
+    }
+  ]
+}
+

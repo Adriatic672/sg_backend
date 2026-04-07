@@ -1,0 +1,36 @@
+name: Deploy to Remote Server
+
+on:
+  push:
+    branches:
+      - stage
+
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Install SSH key for remote server access
+        uses: webfactory/ssh-agent@v0.7.0
+        with:
+          ssh-private-key: ${{ github.ref == 'refs/heads/master' && secrets.SERVER_PRIVATE_KEY_LIVE || secrets.SERVER_PRIVATE_KEY }}
+
+
+      - name: Copy code to remote server
+        run: |
+          rsync -avz --delete -e "ssh -o StrictHostKeyChecking=no" \
+            ./ ${{ secrets.SERVER_USER }}@${{ github.ref == 'refs/heads/master' && secrets.SERVER_HOST_LIVE || secrets.SERVER_HOST }}:/home/ec2-user/apps/socialgems
+
+
+      - name: Run docker-compose on remote server
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ github.ref == 'refs/heads/master' && secrets.SERVER_HOST_LIVE || secrets.SERVER_HOST }} << 'EOF'
+
+          cd /home/ec2-user/apps/socialgems
+          docker-compose build gems
+          docker-compose up -d gems
+          EOF

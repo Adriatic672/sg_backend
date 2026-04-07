@@ -1,0 +1,361 @@
+{
+  "info": {
+    "name": "Agent Endpoints API",
+    "description": "Complete collection of Agent API endpoints including authentication, profile, password management, and campaigns",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "agentJWT",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "agentId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "businessId",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Authentication",
+      "item": [
+        {
+          "name": "Agent Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const response = pm.response.json();",
+                  "    pm.environment.set('agentJWT', response.data.jwt);",
+                  "    pm.environment.set('agentId', response.data.agentId);",
+                  "    console.log('Agent JWT saved:', response.data.jwt);",
+                  "    console.log('Agent ID saved:', response.data.agentId);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"agent@example.com\",\n  \"password\": \"password123\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/agents/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["agents", "login"]
+            },
+            "description": "Login as an agent. Returns JWT token and agent details."
+          },
+          "response": []
+        },
+        {
+          "name": "Change Business Context",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{agentJWT}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"businessId\": \"{{businessId}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/agents/change-business",
+              "host": ["{{baseUrl}}"],
+              "path": ["agents", "change-business"]
+            },
+            "description": "Switch to a different business context. Returns new JWT with business_id."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Profile Management",
+      "item": [
+        {
+          "name": "Get Agent Profile",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{agentJWT}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/agents/profile",
+              "host": ["{{baseUrl}}"],
+              "path": ["agents", "profile"]
+            },
+            "description": "Get agent profile including verification status and statistics."
+          },
+          "response": []
+        },
+        {
+          "name": "Update Agent Profile",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{agentJWT}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"first_name\": \"John\",\n  \"last_name\": \"Doe\",\n  \"phone\": \"+1234567890\",\n  \"country\": \"United States\",\n  \"iso_code\": \"US\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/agents/profile",
+              "host": ["{{baseUrl}}"],
+              "path": ["agents", "profile"]
+            },
+            "description": "Update agent profile information. All fields are optional."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Password Management",
+      "item": [
+        {
+          "name": "Request Password Reset",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"agent@example.com\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/agents/reset-password-request",
+              "host": ["{{baseUrl}}"],
+              "path": ["agents", "reset-password-request"]
+            },
+            "description": "Request password reset. Sends OTP to agent's email."
+          },
+          "response": []
+        },
+        {
+          "name": "Reset Password with OTP",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"agent@example.com\",\n  \"otp\": \"123456\",\n  \"newPassword\": \"newSecurePassword123\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/agents/reset-password",
+              "host": ["{{baseUrl}}"],
+              "path": ["agents", "reset-password"]
+            },
+            "description": "Reset password using OTP received via email."
+          },
+          "response": []
+        },
+        {
+          "name": "Change Password (Authenticated)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{agentJWT}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"currentPassword\": \"oldPassword123\",\n  \"newPassword\": \"newSecurePassword123\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/agents/change-password",
+              "host": ["{{baseUrl}}"],
+              "path": ["agents", "change-password"]
+            },
+            "description": "Change password while logged in. Requires current password."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Business Management",
+      "item": [
+        {
+          "name": "Get Assigned Businesses",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{agentJWT}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/agents/businesses",
+              "host": ["{{baseUrl}}"],
+              "path": ["agents", "businesses"]
+            },
+            "description": "Get all businesses assigned to this agent."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Campaign Management",
+      "item": [
+        {
+          "name": "Get All Agent Campaigns",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{agentJWT}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/agents/campaigns",
+              "host": ["{{baseUrl}}"],
+              "path": ["agents", "campaigns"]
+            },
+            "description": "Get all campaigns created by this agent across all businesses."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Campaigns by Business",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{agentJWT}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/agents/campaigns?business_id={{businessId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["agents", "campaigns"],
+              "query": [
+                {
+                  "key": "business_id",
+                  "value": "{{businessId}}"
+                }
+              ]
+            },
+            "description": "Get campaigns created by this agent for a specific business."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Campaigns by Status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{agentJWT}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/agents/campaigns?status=active",
+              "host": ["{{baseUrl}}"],
+              "path": ["agents", "campaigns"],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "active",
+                  "description": "draft, open_to_applications, active, closed, completed, expired, deleted"
+                }
+              ]
+            },
+            "description": "Get campaigns filtered by status."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Campaigns by Business and Status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{agentJWT}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/agents/campaigns?business_id={{businessId}}&status=draft",
+              "host": ["{{baseUrl}}"],
+              "path": ["agents", "campaigns"],
+              "query": [
+                {
+                  "key": "business_id",
+                  "value": "{{businessId}}"
+                },
+                {
+                  "key": "status",
+                  "value": "draft"
+                }
+              ]
+            },
+            "description": "Get campaigns filtered by both business and status."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
+

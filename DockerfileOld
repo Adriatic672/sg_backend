@@ -1,0 +1,26 @@
+# Use Node.js base image
+FROM node:18
+
+# Install FFmpeg
+RUN apt-get update && apt-get install -y ffmpeg
+
+# Set working directory
+WORKDIR /usr/src/app
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm install --only=production  # Use 'npm ci' for CI/CD builds
+
+# Copy the entire project
+COPY . .
+
+# Build TypeScript
+RUN npx tsc
+
+# Expose port (optional, if your app serves HTTP)
+EXPOSE 3000
+
+# Start the app (use built JavaScript files)
+CMD ["node", "--max-old-space-size=4096", "dist/app.js"]

@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Welcome to Social Gems</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #f5f5f5;
+            margin: 0;
+            padding: 0;
+            color: #232323;
+            font-weight: 400;
+        }
+        .email-container {
+            max-width: 600px;
+            margin: 32px auto;
+            background: #fff;
+            border-radius: 16px;
+            box-shadow: 0 2px 16px rgba(0,0,0,0.04);
+            overflow: hidden;
+        }
+        .header {
+            background: #F9D769;
+            padding: 32px 0 24px 0;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            justify-content: flex-start;
+            padding-left: 40px;
+        }
+        .header .logo-icon {
+            width: 40px;
+            height: 40px;
+            background: #F9D769;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 28px;
+            color: #40BFFF;
+        }
+        .header .brand {
+            font-size: 24px;
+            font-weight: 600;
+            color: #734D20;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+        }
+        .content-section {
+            padding: 32px 40px 0 40px;
+        }
+        .hero-illustration {
+            width: 100%;
+            max-width: 400px;
+            height: 160px;
+            margin: 0 auto 32px auto;
+            background: #faf8f5;
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .hero-illustration span {
+            font-size: 60px;
+            margin-right: 32px;
+        }
+        .hero-illustration .icons {
+            font-size: 32px;
+        }
+        .welcome-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: #232323;
+            margin-bottom: 18px;
+            text-align: left;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+        }
+        .welcome-text {
+            font-size: 14px;
+            color: #232323;
+            margin-bottom: 18px;
+            text-align: left;
+            font-weight: 400;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.5;
+        }
+        .cta-button {
+            display: block;
+            width: 100%;
+            background: #F9D769;
+            color: #232323;
+            font-weight: 600;
+            font-size: 16px;
+            border: none;
+            border-radius: 10px;
+            padding: 18px 0;
+            margin: 32px 0 32px 0;
+            cursor: pointer;
+            text-align: center;
+            text-decoration: none;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+            transition: background 0.2s;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+        }
+        .cta-button:hover {
+            background: #ffe28a;
+        }
+        .tips-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #232323;
+            margin-bottom: 18px;
+            text-align: left;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+        }
+        .tip-list {
+            list-style: none;
+            padding: 0;
+            margin: 0 0 0 0;
+        }
+        .tip-item {
+            display: flex;
+            align-items: flex-start;
+            margin-bottom: 22px;
+            gap: 12px;
+        }
+        .tip-dot {
+            width: 12px;
+            height: 12px;
+            background: #F9D769;
+            border-radius: 50%;
+            margin-top: 7px;
+            flex-shrink: 0;
+        }
+        .tip-content {
+            font-size: 14px;
+            color: #232323;
+            line-height: 1.5;
+            text-align: left;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+        }
+        .tip-content strong {
+            font-weight: 600;
+            color: #232323;
+        }
+        .tip-content a {
+            color: #C89B3C;
+            text-decoration: underline;
+            font-weight: 600;
+        }
+        .app-buttons {
+            display: flex;
+            justify-content: left;
+            gap: 16px;
+            margin: 32px 0 0 0;
+        }
+        .app-button {
+            display: inline-block;
+            height: 44px;
+        }
+        .footer {
+            text-align: center;
+            font-size: 12px;
+            color: #A0A0A0;
+            padding: 32px 0 0 0;
+            background: #fafafa;
+            border-top: 1px solid #ECECEC;
+            margin-top: 40px;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+        }
+        .footer .social-icons {
+            margin: 18px 0 10px 0;
+        }
+        .footer .social-icons a {
+            display: inline-block;
+            margin: 0 10px;
+            color: #F9D769;
+            font-size: 24px;
+            text-decoration: none;
+            vertical-align: middle;
+            transition: color 0.2s;
+        }
+        .footer .social-icons a:hover {
+            color: #734D20;
+        }
+        .footer .company {
+            font-weight: 600;
+            color: #232323;
+            margin-top: 8px;
+            margin-bottom: 2px;
+            font-size: 13px;
+        }
+        .footer .unsubscribe {
+            color: #A0A0A0;
+            text-decoration: underline;
+            font-size: 12px;
+            margin-top: 8px;
+            display: inline-block;
+        }
+        @media only screen and (max-width: 700px) {
+            .email-container {
+                max-width: 100%;
+                border-radius: 0;
+            }
+            .content-section {
+                padding: 24px 10px 0 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="email-container">
+        <div class="header">
+            <div class="logo-icon">💎</div>
+            <span class="brand">Social Gems</span>
+        </div>
+        <div class="content-section">
+            <div class="hero-illustration">
+                <span>👩‍💻</span>
+                <span class="icons">💵 📄 ☕</span>
+            </div>
+            <div class="welcome-title">Welcome to Social Gems - Connect . Inspire . Glow</div>
+            <div class="welcome-text">
+                You've joined a community of over 120,000 creators who've earned $100M+ this year sharing products they love. Social Gems makes it easy to connect with today's top brands, create shoppable links, and turn your passion into profit.
+            </div>
+            <div class="welcome-text">
+                Watch this quick video to see how easy it is to create your campaign. Then jump into your account and start earning today. Keep an eye on your inbox for weekly tips, insider perks, and brand promos. Add us to your contacts so you never miss a thing!
+            </div>
+            <a href="#" class="cta-button">Start earning</a>
+            <div class="tips-title">Here are some quick tips to get you started</div>
+            <ul class="tip-list">
+                <li class="tip-item">
+                    <div class="tip-dot"></div>
+                    <div class="tip-content">
+                        <strong>Complete your profile.</strong> Turn on push notifications so you don't miss exclusive offers, commission boosts, trending deals, and more.<br>
+                        <a href="#">Enable Notifications →</a>
+                    </div>
+                </li>
+                <li class="tip-item">
+                    <div class="tip-dot"></div>
+                    <div class="tip-content">
+                        <strong>Connect your social accounts.</strong> Join our live webinar for best practices and get all your questions answered by our experts.<br>
+                        <a href="#">Join a Webinar →</a>
+                    </div>
+                </li>
+                <li class="tip-item">
+                    <div class="tip-dot"></div>
+                    <div class="tip-content">
+                        <strong>Grow your influence.</strong> Discover creator tips, brand contests, and proven ways to drive sales on the Mavely blog.<br>
+                        <a href="#">Explore the Blog →</a>
+                    </div>
+                </li>
+            </ul>
+            <div class="app-buttons">
+                <a href="#"><img height="40" src="https://developer.android.com/images/brand/en_generic_rgb_wo_45.png" alt="Google Play" class="app-button"></a>
+                <a href="#"><img height="44" width="150" src="https://developer.apple.com/app-store/marketing/guidelines/images/badge-download-on-the-app-store.svg" alt="App Store" class="app-button"></a>
+            </div>
+        </div>
+        <div class="footer">
+            <div style="margin-bottom: 10px;">You are receiving this email because you are part of our mailing list</div>
+            <div class="social-icons">
+                <a href="#">𝕏</a>
+                <a href="#">📷</a>
+                <a href="#">▶️</a>
+                <a href="#">💼</a>
+                <a href="#">🎵</a>
+                <a href="#">📘</a>
+            </div>
+            <div class="company">Social Gems Limited</div>
+            <div class="company">Leicester, UK</div>
+            <a href="#" class="unsubscribe">Unsubscribe</a>
+        </div>
+    </div>
+</body>
+</html> 

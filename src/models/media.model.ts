@@ -5,7 +5,7 @@ import sharp from "sharp";
 
 class Media extends Model {
   async uploadFile(data: any, files: any[]) {
-       const fileType = ["PROFILE_PIC", "STATUS_POST", "THUMBNAIL","VIDEO"];
+       const fileType = ["PROFILE_PIC", "STATUS_POST", "THUMBNAIL", "VIDEO", "JOB_GUIDELINES"];
        
     try {
       if (files.length > 3) {

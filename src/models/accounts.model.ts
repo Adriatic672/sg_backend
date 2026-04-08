@@ -224,7 +224,7 @@ class Accounts extends Model {
       if (!token || !userId || !site_name) {
         return this.makeResponse(400, "Missing required fields: token or userId or site_name");
       }
-      const allowedSites = ['tiktok', 'instagram', 'X'];
+      const allowedSites = ['tiktok', 'instagram', 'X', 'facebook'];
       if (!allowedSites.includes(site_name)) {
         return this.makeResponse(400, "Invalid site name");
       }
@@ -253,6 +253,23 @@ class Accounts extends Model {
           const x = await SocialVerifier.verify('twitter', token);
           console.log("SocialVerifier::X", x);
           socialUsername = x.username;
+          break;
+        case 'facebook':
+          // For Facebook, get username from Graph API
+          try {
+            const fbResponse = await axios.get('https://graph.facebook.com/me', {
+              params: {
+                fields: 'name',
+                access_token: token
+              },
+              timeout: 10000
+            });
+            socialUsername = fbResponse.data?.name || `facebook_user_${userId.substring(0, 8)}`;
+            console.log("Facebook user:", socialUsername);
+          } catch (fbError: any) {
+            console.log("Facebook username fetch error:", fbError.message);
+            socialUsername = `facebook_user_${userId.substring(0, 8)}`;
+          }
           break;
         default:
           return this.makeResponse(400, "Invalid site name");
@@ -911,11 +928,13 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
       }
       const newPhone = await this.stripePhoneNumber(phone_number)
 
+      let numericCountryId: number | null = null;
       if (country_id) {
-        const countryExists = await this.checkCountryId(country_id);
-        if (!countryExists) {
+        const countryData: any = await this.callQuerySafe(`SELECT id FROM countries WHERE iso2='${country_id}' OR id='${country_id}'`);
+        if (!countryData || countryData.length === 0) {
           return this.makeResponse(400, "Country does not exist");
         }
+        numericCountryId = countryData[0].id;
       }
       if (newPhone) {
         const userByPhone: any = await this.getUserByPhone(newPhone);
@@ -960,21 +979,27 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
       }
 
       const hashPassword = this.hashPassword(random_password);
-      const newUser = { user_id: userId, user_type, email, password: hashPassword, status: "draft", source };
+      const newUser = { user_id: userId, business_id: userId, user_type, email, password: hashPassword, status: "draft", source };
       await this.insertData("users", newUser);
 
       const username = await this.getNextUsername();
       const referral_code_ = this.getTrimedString(6).toUpperCase();
 
-      const newProfile: UserProfile = { user_id: userId, username, iso_code, first_name, last_name, phone: newPhone, country_id, referral_code: referral_code_ };
+      const newProfile: UserProfile = { user_id: userId, username, iso_code, first_name, last_name, phone: newPhone, country_id: numericCountryId as any, referral_code: referral_code_ };
 
       if (user_type == 'brand') {
         try {
           const staffId = "stf" + this.getTrimedString(20);
           const newBusiness = {
             business_id: userId,
-            business_name: data.business_name || "",
-            owner_id: staffId
+            name: data.business_name || "",
+            owner_id: staffId,
+            address: "",
+            phone: newPhone,
+            email: email,
+            is_registered: "no",
+            country: iso_code || "",
+            created_by_type: "brand"
           }
           await this.insertData("business_profile", newBusiness);
           const newStaff = {
@@ -1026,6 +1051,17 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
 
       await this.commitTransaction();
       const referal_code = this.getTrimedString(6).toUpperCase();
+
+      // Create Stellar wallet for new user (async, non-blocking)
+      try {
+        const UserStellarService = (await import('../helpers/UserStellarService')).UserStellarService;
+        const userStellarService = new UserStellarService();
+        userStellarService.createUserStellarWallet(userId).catch((err: any) => {
+          logger.warn(`Failed to create Stellar wallet for user ${userId}:`, err);
+        });
+      } catch (error) {
+        logger.warn("Could not initialize Stellar wallet creation:", error);
+      }
 
       if (source == "apple" || source == "google") {
         await this.updateData("users", `email='${email}'`, { email_verified: 'yes', status: "active" });
@@ -1154,7 +1190,12 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
     try {
       const { userId, business_name, country, is_registered, registration_number, business_address, business_phone, business_email, business_website, business_description, business_logo } = data;
 
-      const business_id = userId
+      // Validate userId from JWT
+      if (!userId) {
+        return this.makeResponse(401, "User not authenticated. Please login again.");
+      }
+
+      const business_id = userId;
       // Validate required fields
       if (!business_name || !business_address || !business_phone || !business_email) {
         return this.makeResponse(400, "Missing required business information");
@@ -1208,7 +1249,8 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
         verification_status: 'pending',
         registration_number: registration_number,
         country: country,
-        is_registered: is_registered == 1 ? 'yes' : 'no'
+        is_registered: is_registered == 1 ? 'yes' : 'no',
+        rejection_reason: ''
       }
       await this.insertData("business_profile", newBusiness);
       return this.makeResponse(200, "Business added successfully", newBusiness);
@@ -1354,11 +1396,15 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
         if (comfortable_campaign_activities) contentForm.comfortable_campaign_activities = comfortable_campaign_activities;
         if (platforms_most_content) contentForm.platforms_most_content = JSON.stringify(platforms_most_content);
         if (content_types_enjoyed_most) contentForm.content_types_enjoyed_most = JSON.stringify(content_types_enjoyed_most);
-        const hasContentForm = await this.selectDataQuery("influencer_preferences", `user_id='${userId}'`);
-        if (hasContentForm.length > 0) {
-          await this.updateData("influencer_preferences", `user_id='${userId}'`, contentForm);
-        } else {
-          await this.insertData("influencer_preferences", { user_id: userId, ...contentForm });
+        
+        // Only update if there's content to save
+        if (Object.keys(contentForm).length > 0) {
+          const hasContentForm = await this.selectDataQuery("influencer_preferences", `user_id='${userId}'`);
+          if (hasContentForm.length > 0) {
+            await this.updateData("influencer_preferences", `user_id='${userId}'`, contentForm);
+          } else {
+            await this.insertData("influencer_preferences", { user_id: userId, ...contentForm });
+          }
         }
       } catch (err) {
         logger.info(`UPDATED_ISSUE`, err)
@@ -1921,6 +1967,89 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
     await this.updateData("users", `user_id='${userId}'`, { status: 'active' });
 
     return { status: 200, message: "Account deletion request revoked successfully" };
+  }
+
+  async currencies() {
+    // Fetch currencies from database table, fallback to default if table doesn't exist or is empty
+    try {
+      const currencies = await this.selectDataQuery(`currencies`);
+      if (currencies && currencies.length > 0) {
+        return { status: 200, message: "Success", data: currencies };
+      }
+    } catch (error) {
+      // Table might not exist, return default currencies
+    }
+    // Default currencies
+    const defaultCurrencies = [
+      { code: 'UGX', name: 'Ugandan Shilling', symbol: 'USh' },
+      { code: 'USD', name: 'US Dollar', symbol: 'USD' },
+      { code: 'KES', name: 'Kenyan Shilling', symbol: 'KSh' },
+      { code: 'GBP', name: 'British Pound', symbol: 'GBP' },
+      { code: 'EUR', name: 'Euro', symbol: 'EUR' }
+    ];
+    return { status: 200, message: "Success", data: defaultCurrencies };
+  }
+
+  async ranks() {
+    // Fetch ranks from database table, fallback to default if table doesn't exist or is empty
+    try {
+      const ranks = await this.selectDataQuery(`influencer_ranks`);
+      if (ranks && ranks.length > 0) {
+        return { status: 200, message: "Success", data: ranks };
+      }
+    } catch (error) {
+      // Table might not exist, return default ranks
+    }
+    // Default ranks
+    const defaultRanks = [
+      { id: 1, name: 'Bronze', min_points: 0, max_points: 1000 },
+      { id: 2, name: 'Silver', min_points: 1001, max_points: 5000 },
+      { id: 3, name: 'Gold', min_points: 5001, max_points: 10000 }
+    ];
+    return { status: 200, message: "Success", data: defaultRanks };
+  }
+
+  async jobNiches() {
+    // Fetch job niches from database table, fallback to default if table doesn't exist or is empty
+    try {
+      const niches = await this.selectDataQuery(`job_niches`);
+      if (niches && niches.length > 0) {
+        return { status: 200, message: "Success", data: niches.map((n: any) => n.name) };
+      }
+    } catch (error) {
+      // Table might not exist, return default niches
+    }
+    // Default job niches
+    const defaultNiches = [
+      'Fashion & Style',
+      'Beauty & Skincare',
+      'Food & Drink',
+      'Travel',
+      'Fitness & Wellness',
+      'Tech & Gadgets',
+      'Finance & Business',
+      'Gaming',
+      'Lifestyle',
+      'Parenting & Family',
+      'Music & Entertainment',
+      'Comedy & Skits',
+      'Education',
+      'Sports',
+      'Home & Decor'
+    ];
+    return { status: 200, message: "Success", data: defaultNiches };
+  }
+
+  async getBrandHiredInfluencers(brandId: string) {
+    try {
+      // Query hired influencers for this brand
+      const hiredInfluencers: any = await this.selectDataQuery(`sc_campaign_invites`, `campaign_id IN (SELECT campaign_id FROM act_campaigns WHERE created_by_user_id = '${brandId}') AND invite_status = 'accepted' AND action_status = 'completed'`);
+
+      return { status: 200, message: "Hired influencers retrieved successfully", data: hiredInfluencers };
+    } catch (error) {
+      console.error("Error in getBrandHiredInfluencers:", error);
+      return { status: 500, message: "Error fetching hired influencers" };
+    }
   }
 }
 

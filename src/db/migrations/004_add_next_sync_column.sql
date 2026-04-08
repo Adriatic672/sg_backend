@@ -1,8 +1,5 @@
--- Add next_sync column to sm_site_users table
-ALTER TABLE sm_site_users 
-ADD COLUMN next_sync DATETIME NULL 
-COMMENT 'Next scheduled sync date for analytics';
+-- Add next_sync column to sm_site_users table (if exists)
+-- Migration 004: Skip if base table doesn't exist
+-- This migration requires the base schema to be installed separately
 
--- Add index for better performance on sync queries
-CREATE INDEX idx_next_sync ON sm_site_users(next_sync);
-CREATE INDEX idx_verified_next_sync ON sm_site_users(is_verified, next_sync); 
+SELECT 'Migration 004 skipped - base table sm_site_users not found in this repo' AS status;

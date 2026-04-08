@@ -3,14 +3,15 @@ import { NetworkData } from './analytics/influencer';
 import { AnalyticsCalculator, SocialPost, UserInfo } from '../helpers/analyticsCalculator';
 
 export default class InstagramAPI {
-  static async OAuth2(token: any, userId: any) {
+  static async OAuth2(token: any, userId: any): Promise<boolean> {
     return false
   }
   private axiosInstance = axios.create({
-    baseURL: 'https://instagram-social-api.p.rapidapi.com/v1',
+    baseURL: 'https://instagram120.p.rapidapi.com/api/instagram',
     headers: {
       'x-rapidapi-key': process.env.RAPIDAPI_KEY,
-      'x-rapidapi-host': 'instagram-social-api.p.rapidapi.com'
+      'x-rapidapi-host': 'instagram120.p.rapidapi.com',
+      'Content-Type': 'application/json'
     }
   });
 
@@ -28,7 +29,8 @@ export default class InstagramAPI {
    */
   public async getFollowers(username: string): Promise<number> {
     try {
-      const response = await this.get('/info', { username_or_id_or_url: username });
+      // Use POST to /profile endpoint
+      const response = await this.post('/profile', { username });
       console.log('getFollowers-x (Instagram)', response.data);
       console.log('getFollowers-x (Instagram)', response.data.data);
       console.log('getFollowers-x (Instagram)', response.data.data.follower_count);
@@ -41,21 +43,44 @@ export default class InstagramAPI {
     }
   }
   async getUserInfo(username: string): Promise<UserInfo> {
-    const response = await this.get('/info', { username_or_id_or_url: username });
-    const responseData = response.data.data;
-    console.log("responseData", responseData);
-    return {
-      user: {
-        id: responseData.id,
-        followers_count: responseData.follower_count,
-        verified: responseData.is_verified,
-        location: responseData.location,
-        created_at: responseData.created_at,
-        bio: responseData.bio,
-        name: responseData.full_name,
-        username: responseData.username
+    // Try multiple endpoint variations as the API may use different naming
+    const endpoints = [
+      { url: '/userInfo', data: { username } },
+      { url: '/user_info', data: { username } },
+      { url: '/profile', data: { username } }
+    ];
+    
+    for (const endpoint of endpoints) {
+      try {
+        console.log(`Trying Instagram endpoint: ${endpoint.url}`);
+        const response = await this.post(endpoint.url, endpoint.data);
+        console.log(`Instagram ${endpoint.url} response:`, response.data);
+        
+        // Handle different response structures
+        const userData = response.data.data || response.data;
+        
+        if (userData) {
+          return {
+            user: {
+              id: userData.pk || userData.id || '',
+              followers_count: userData.follower_count || userData.followers_count || 0,
+              verified: userData.is_verified || userData.verified || false,
+              location: userData.city_name || userData.location || '',
+              created_at: userData.created_at || '',
+              bio: userData.biography || userData.bio || '',
+              name: userData.full_name || userData.name || '',
+              username: userData.username || username
+            }
+          };
+        }
+      } catch (error: any) {
+        console.log(`Endpoint ${endpoint.url} failed:`, error.response?.status, error.message);
+        // Continue to next endpoint
       }
     }
+    
+    // If all endpoints fail, throw error
+    throw new Error('All Instagram API endpoints failed');
   }
 
   /**
@@ -65,8 +90,8 @@ export default class InstagramAPI {
     try {
       console.log(`📸 Fetching Instagram posts for @${username}...`);
       
-      // Try the posts endpoint directly with username
-      const postsResponse = await this.get('/posts', { username_or_id_or_url: username });
+      // Use POST to /posts endpoint
+      const postsResponse = await this.post('/posts', { username });
       console.log('Instagram posts response received');
       
       if (!postsResponse.data?.data?.items || !Array.isArray(postsResponse.data.data.items)) {
@@ -100,8 +125,8 @@ export default class InstagramAPI {
     try {
       console.log(`📸 Fetching Instagram reels for @${username}...`);
       
-      // Use the correct endpoint for reels
-      const reelsResponse = await this.get('/reels', { username_or_id_or_url: username });
+      // Use POST to /reels endpoint
+      const reelsResponse = await this.post('/reels', { username });
       console.log('Instagram reels response received');
       
       if (!reelsResponse.data?.data?.items || !Array.isArray(reelsResponse.data.data.items)) {
@@ -220,7 +245,8 @@ export default class InstagramAPI {
   
   public async verifyPost(username: string, postCode: string, searchText: string){
     try {
-      const response = await this.get('/post_info', { code_or_id_or_url: postCode });
+      // Use POST to /mediaByShortcode endpoint
+      const response = await this.post('/mediaByShortcode', { shortcode: postCode });
       const postData = response.data.data
   
       // Extract post info

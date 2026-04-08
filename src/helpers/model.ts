@@ -306,7 +306,7 @@ export default class Model extends BaseModel {
             return this.makeResponse(500, "Error verifying business");
         }
     }
-    async sendAppNotification(userId: string, operation: string, name: string = '', amount: string = "", customeObj: any = '', reason = '', category: any = 'GENERAL') {
+    async sendAppNotification(userId: string, operation: string, name: string = '', amount: string = "", customeObj: any = '', reason = '', category: any = 'GENERAL', senderCompanyId: string | null = null) {
         try {
             console.log(`SEND_1`, { userId, operation })
             const userInfo = await this.getUsersProfile(userId)
@@ -319,7 +319,7 @@ export default class Model extends BaseModel {
 
             if (customeObj != '') {
                 sendNotification(token, customeObj);
-                this.saveNotification(operation, email, customeObj, userId, {}, category, "APP");
+                this.saveNotification(operation, userId, customeObj, senderCompanyId, {}, category, "ALL");
                 return true
             }
 
@@ -354,7 +354,7 @@ export default class Model extends BaseModel {
                     mailer.sendMail(email, subject, subject, new_message);
                 }
             }
-            this.saveNotification(subject, email, formatedMessage, userId, data, appcategory, channel);
+            this.saveNotification(subject, userId, formatedMessage, senderCompanyId, data, appcategory, "ALL");
 
         } catch (error) {
             cloudWatchLogger.error("Error in sendAppNotification", error, { userId, operation, name, amount, category });
@@ -502,7 +502,7 @@ export default class Model extends BaseModel {
     }
 
     async getUserById(userId: string) {
-        return await this.callQuerySafe(`select wallet_pin,user_id, email,user_type,email_verified,level_name, level_id,status,user_type from users u INNER JOIN levels l on u.level_id=l.id where user_id='${userId}' `);
+        return await this.callQuerySafe(`select wallet_pin,user_id, email,user_type,email_verified,level_name, level_id,status,user_type from users u LEFT JOIN levels l on u.level_id=l.id where user_id='${userId}' `);
     }
     async getUsersEmail(id: string) {
         const userInfo: any = await this.callQuerySafe(`SELECT email FROM users where user_id ='${id}' `);
@@ -762,6 +762,7 @@ export default class Model extends BaseModel {
                 wallet_id: asset + this.getRandomString(),
                 user_id,
                 asset,
+                status: 'active',
                 wallet_pin: null,
                 balance: 0
             }
@@ -879,7 +880,7 @@ export default class Model extends BaseModel {
                 }
             
             const clientName = await this.getClientName(userId)
-            this.sendAppNotification(userId, "DEPOSIT", clientName, amount.toString(), "", "Deposit", "WALLET")
+            this.sendAppNotification(userId, "DEPOSIT", clientName, amount.toString(), "", "Deposit", "WALLET", process.env.ADMIN_WALLET || "0X0000000000")
             return this.makeResponse(100, "Deposit status updated successfully");
             }else{
                 return this.makeResponse(400, "Deposit failed");
@@ -1022,7 +1023,7 @@ export default class Model extends BaseModel {
                 }
             }
 
-            this.sendAppNotification(crUserId, narration, "", amount.toString(), "", narration)
+            this.sendAppNotification(crUserId, narration, "", amount.toString(), "", narration, 'GENERAL', process.env.ADMIN_WALLET || "0X0000000000")
             return this.makeResponse(200, "Transfer completed successfully", newTransaction);
 
         } catch (error) {
@@ -1121,15 +1122,32 @@ export default class Model extends BaseModel {
             console.log(`newTransaction`, newTransaction)
 
             await this.insertData('wl_transactions', newTransaction);
-            await this.updateData('user_wallets', `wallet_id='${cr_wallet_id}'`, { balance: newCreditBalance });
-            await this.updateData('user_wallets', `wallet_id='${dr_wallet_id}'`, { balance: newDebitBalance });
+            
+            // Update wallet balances and states
+            const crWalletUpdate: any = { balance: newCreditBalance };
+            const drWalletUpdate: any = { balance: newDebitBalance };
+            
+            // Update credit wallet states (received money)
+            if (trans_type === 'DEPOSIT' || trans_type === 'TRANSFER' || trans_type === 'CR') {
+                crWalletUpdate.available_balance = parseFloat(creditWallet.available_balance || 0) + amount;
+                crWalletUpdate.total_earned = parseFloat(creditWallet.total_earned || 0) + amount;
+            }
+            
+            // Update debit wallet states (sent money)
+            if (trans_type === 'WITHDRAW' || trans_type === 'TRANSFER' || trans_type === 'DR') {
+                drWalletUpdate.available_balance = parseFloat(debitWallet.available_balance || 0) - amount;
+                drWalletUpdate.total_withdrawn = parseFloat(debitWallet.total_withdrawn || 0) + amount;
+            }
+            
+            await this.updateData('user_wallets', `wallet_id='${cr_wallet_id}'`, crWalletUpdate);
+            await this.updateData('user_wallets', `wallet_id='${dr_wallet_id}'`, drWalletUpdate);
             await this.commitTransaction();
 
             const clientName = await this.getClientName(crUserId)
             const clientName2 = await this.getClientName(drUserId)
 
-            this.sendAppNotification(crUserId, narration, clientName, amount.toString(), "", narration, "WALLET")
-            this.sendAppNotification(drUserId, narration, clientName2, amount.toString(), "", narration, "WALLET")
+            this.sendAppNotification(crUserId, narration, clientName, amount.toString(), "", narration, "WALLET", process.env.ADMIN_WALLET || "0X0000000000")
+            this.sendAppNotification(drUserId, narration, clientName2, amount.toString(), "", narration, "WALLET", process.env.ADMIN_WALLET || "0X0000000000")
 
             return this.makeResponse(200, "Transfer completed successfully", newTransaction);
 
@@ -1236,9 +1254,9 @@ export default class Model extends BaseModel {
 
     async saveNotification(
         title: string,
-        company_id: string,
+        recipientUserId: string,
         message: any,
-        userId: string,
+        senderCompanyId: string | null = null,
         response: any = '',
         category = 'GENERAL',
         channel = 'ALL'
@@ -1246,12 +1264,13 @@ export default class Model extends BaseModel {
         try {
             const newUser = {
                 title,
-                company_id,
-                message: typeof message === 'object' ? JSON.stringify(message) : message,
+                user_id: recipientUserId,
                 category,
-                user_id: userId,
+                company_id: senderCompanyId,
+                message: typeof message === 'object' ? JSON.stringify(message) : message,
                 response_body: typeof response === 'object' ? JSON.stringify(response) : response,
-                channel
+                channel,
+                status: 'unread'
             };
             return await this.insertData('notifications', newUser);
         } catch (error: any) {

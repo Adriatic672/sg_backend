@@ -6,11 +6,27 @@ import RelworxMobileMoney from "../thirdparty/Relworx";
 import crypto from 'crypto';
 import { logger } from '../utils/logger';
 import cloudWatchLogger from '../helpers/cloudwatch.helper';
-import { createItem, getItemById, updateItem } from "../helpers/dynamodb.helper";
 
 const mm = new RelworxMobileMoney()
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', { apiVersion: '2024-12-18.acacia' });
+let _stripe: Stripe | null = null;
+function getStripe(): Stripe {
+  if (!_stripe) {
+    const key = process.env.STRIPE_SECRET_KEY;
+    if (!key) {
+      if (process.env.ENVIRONMENT === 'production') throw new Error('STRIPE_SECRET_KEY is not configured');
+      console.warn('[StripeMock] Using mock Stripe instance');
+      _stripe = {
+        subscriptions: { list: async () => ({ data: [] }) },
+        paymentIntents: { retrieve: async () => ({ status: 'succeeded', amount: 1000 }) },
+        checkout: { sessions: { create: async () => ({ url: 'http://mock-url', id: 'mock_session_id' }) } }
+      } as any;
+    } else {
+      _stripe = new Stripe(key, { apiVersion: '2024-12-18.acacia' });
+    }
+  }
+  return _stripe!;
+}
 
 export default class Payments extends Model {
 
@@ -580,7 +596,7 @@ export default class Payments extends Model {
 
       // Hash the new PIN.
       const hashedNewPin = this.hashPin(newPin);
-      await this.updateData('user_wallets', `wallet_pin: '${hashedNewPin}'`, { user_id: userId });
+      await this.updateData('user_wallets', `user_id = '${userId}'`, { wallet_pin: hashedNewPin });
       return this.makeResponse(200, "Transaction PIN reset successfully");
     } catch (error: any) {
       console.error("Error resetting transaction PIN:", error.message);
@@ -588,6 +604,10 @@ export default class Payments extends Model {
     }
   }
 
+  async getUserWallet(userId: string, currency: string) {
+    const wallet = await this.GenerateCurrencyWallet(userId, currency);
+    return wallet;
+  }
 
   async GetWallet(userId: string, currency: string) {
     const wallet = await this.GenerateCurrencyWallet(userId, currency);
@@ -647,7 +667,7 @@ export default class Payments extends Model {
   }
 
   async getWalletInfoByWalletId(wallet_id: string) {
-    const walletInfo: any = await this.callQuerySafe(`select wallet_id, first_name, last_name, email, phone from user_wallets INNER JOIN users_profile ON user_wallets.user_id = users_profile.user_id where user_wallets.wallet_id='${wallet_id}'`);
+    const walletInfo: any = await this.callQuerySafe(`SELECT w.wallet_id, up.first_name, up.last_name, u.email, up.phone FROM user_wallets w INNER JOIN users_profile up ON w.user_id = up.user_id INNER JOIN users u ON w.user_id = u.user_id WHERE w.wallet_id='${wallet_id}'`);
     if (walletInfo.length == 0) {
       return null
     }
@@ -730,19 +750,37 @@ export default class Payments extends Model {
         user_id: userId,
         dr_wallet_id: issuerWalletId,
         cr_wallet_id: userWalletId,
-        asset: currency,
+        asset:currency,
         currency,
         amount,
         deposit_currency: request_currency,
         request_amount,
         trans_type: "DEPOSIT",
         narration: "DEPOSIT REQUEST",
-        status: 'PENDING'
+        status: 'PENDING',
+        running_balance: 0
       };
       await this.insertData('wl_transactions', newTransaction);
 
 
+      // MOCK PAYMENT: If we are in dev/local/debug, skip the real payment gateway
+      if (paymentMethod === "MOBILE" && process.env.ENVIRONMENT !== 'production') {
+        logger.info(`[Mock Payment] Skipping Relworx call for ${refId} in ${process.env.ENVIRONMENT} mode`);
+
+        // 1. Update transaction status to SUCCESS
+        await this.updateData('wl_transactions', `trans_id='${refId}'`, { status: 'SUCCESS' });
+
+        // 2. Credit the user's wallet directly
+        const currentWallet: any = await this.callQuerySafe(`SELECT balance FROM user_wallets WHERE wallet_id='${userWalletId}'`);
+        if (currentWallet.length > 0) {
+          const newBalance = parseFloat(currentWallet[0].balance) + parseFloat(amount);
+          await this.updateData('user_wallets', `wallet_id='${userWalletId}'`, { balance: newBalance });
+        }
+        return this.makeResponse(200, "Deposit Successful (Mock)");
+      }
+
       if (paymentMethod == "MOBILE") {
+        logger.info(`[Relworx] Initiating Payment: Ref=${refId}, Acc=${account_number}, Amt=${request_amount} ${request_currency}`);
         const requestPayment = await mm.requestPayment(refId, account_number, request_currency, request_amount, "DEPOSIT REQUEST")
         logger.info("requestPayment", requestPayment)
         if (requestPayment.status != 200) {
@@ -845,7 +883,7 @@ export default class Payments extends Model {
           logger.info(`Checkout session completed. Payment Intent: ${paymentIntentId}`);
 
           // Fetch the Payment Intent details
-          const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+          const paymentIntent = await getStripe().paymentIntents.retrieve(paymentIntentId);
 
           if (paymentIntent.status === "succeeded") {
             // Credit the user in your system
@@ -904,6 +942,7 @@ export default class Payments extends Model {
       console.log("transferRequest", data)
       const { userId, receiverId, amount, payment_method_id, pin, paymentMethod, currency } = data;
       let narration = "SOCIAL GEMS"
+      const payout_currency = currency
       const baseCurrency = "USD"
       let account_number = data.account_number || ""
 
@@ -916,8 +955,13 @@ export default class Payments extends Model {
       }
 
 
-      let payout_currency = ""
- 
+
+      const conversionRate = await this.getRate(baseCurrency, currency);
+      if (conversionRate == 0) {
+        return this.makeResponse(400, "Exchange not available for " + baseCurrency + " to " + currency + " at the moment");
+      }
+      const convertedAmount = amount * conversionRate;
+
       const paymentMethods = await this.getPaymentTypes()
       const allowedPaymentMethods = paymentMethods.data
       if (!allowedPaymentMethods.includes(paymentMethod)) {
@@ -937,7 +981,10 @@ export default class Payments extends Model {
         crWalletId = account_number
       } else {
 
-       
+        const supportedCurrency = await this.supportedCurrency(payout_currency);
+        if (!supportedCurrency) {
+          return this.makeResponse(400, "Payout is not supported for " + payout_currency);
+        }
 
         const getPaymentMethod: any = await this.getUserPaymentMethod(payment_method_id, paymentMethod, userId)
         if (getPaymentMethod.length == 0) {
@@ -961,7 +1008,6 @@ export default class Payments extends Model {
         if (!phoneRegex.test(account_number.replace("+", ""))) {
           return this.makeResponse(400, "Invalid phone number format for MOBILE_MONEY");
         }
-        payout_currency = await this.detectCurrency(account_number)
       }
 
       const pinValidation = await this.validatePin(userId, pin);
@@ -995,13 +1041,6 @@ export default class Payments extends Model {
       if (process.env.ENVIRONMENT != 'production') {
         return transferObj
       }
-
-      const conversionRate = await this.getRate(baseCurrency, payout_currency);
-      if (conversionRate == 0) {
-        return this.makeResponse(400, "Exchange not available for " + baseCurrency + " to " + payout_currency + " at the moment");
-      }
-      const convertedAmount = amount * conversionRate;
-
 
       const finalResponse = await this.makeThirdpartyTransfer(userId, convertedAmount, paymentType, account_number, currency, payout_currency, narration, refId)
       logger.info("finalResponse", finalResponse)
@@ -1105,7 +1144,7 @@ export default class Payments extends Model {
         return this.makeResponse(400, "User does not have a Stripe customer ID");
       }
 
-      const subscriptions = await stripe.subscriptions.list({
+      const subscriptions = await getStripe().subscriptions.list({
         customer: customerId,
         status: 'active',
       });
@@ -1173,6 +1212,19 @@ export default class Payments extends Model {
       const { sub_tag, userId, successUrl, cancelUrl, type } = data;
 
       let amount: number;
+
+      // MOCK PAYMENT: If we are in dev/local/debug, skip the real Stripe call
+      if (process.env.ENVIRONMENT !== 'production') {
+        logger.info(`[Mock Payment] Skipping Stripe call for card payment in ${process.env.ENVIRONMENT} mode`);
+        const mockSessionId = `cs_test_${this.getRandomString()}`;
+        const mockPaymentUrl = `${successUrl}?session_id=${mockSessionId}`;
+
+        return this.makeResponse(200, 'Mock payment session created successfully', {
+          paymentUrl: mockPaymentUrl,
+          sessionId: mockSessionId,
+        });
+      }
+
       let currency: string;
       let description: string;
       let subName: string;
@@ -1205,7 +1257,7 @@ export default class Payments extends Model {
       }
 
       // Create a Checkout Session
-      const session = await stripe.checkout.sessions.create({
+      const session = await getStripe().checkout.sessions.create({
         billing_address_collection: 'auto',
         customer_email: email,
         payment_method_types: ['card'],

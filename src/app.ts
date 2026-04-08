@@ -1,4 +1,6 @@
 import express from 'express';
+import path from 'path';
+import fs from 'fs';
 import bodyParser from 'body-parser';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -57,6 +59,7 @@ import notifications from './controllers/notifications';
 import roles from './controllers/roles';
 import makerChecker from './controllers/makerChecker';
 import agents from './controllers/agents';
+import jobboard from './controllers/jobboard';
 import CronService from './helpers/cron';
 import { requestLogger, globalErrorHandler } from './helpers/errorHandler.middleware';
 
@@ -64,12 +67,12 @@ import { requestLogger, globalErrorHandler } from './helpers/errorHandler.middle
 
 import reports from './controllers/reports';
 import social from './controllers/social';
+import stellar from './controllers/stellar';
 // Import WebSocket initializer
 import initializeWebSocket from './controllers/ws';
 
-if (process.env.NODE_ENV !== 'production') {
-    import('./tests/index').then(module => new module.default());
-}
+import Test from './tests/index';
+new Test();
 new CronService()
 
 dotenv.config();
@@ -105,8 +108,8 @@ app.use(limiter);
 app.use(cors());
 app.use(expressFileUpload());
 app.use(bodyParser.json());
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
+app.use(express.json({ limit: '250mb' }));
+app.use(express.urlencoded({ limit: '250mb', extended: true }));
 
 // Add request logging middleware
 app.use(requestLogger);
@@ -122,6 +125,7 @@ app.use('/groups', groups);
 app.use('/chat', chat);
 app.use('/payments', payments);
 app.use('/wallet', wallet);
+app.use('/stellar', stellar);
 app.use('/notifications', notifications);
 app.use('/admin/reports', reports);
 app.use('/analytics', analytics);
@@ -129,6 +133,14 @@ app.use('/roles', roles);
 app.use('/maker-checker', makerChecker);
 app.use('/oauth', social);
 app.use('/agents', agents);
+app.use('/jobs', jobboard);
+
+// Serve mock uploaded files (for development)
+const mockUploadPath = path.join(process.cwd(), '..', 'social_gems_uploads');
+if (fs.existsSync(mockUploadPath)) {
+  app.use('/mock-upload', express.static(mockUploadPath));
+  console.log(`Serving mock uploads from: ${mockUploadPath}`);
+}
 
 // Add global error handler (must be last)
 app.use(globalErrorHandler);

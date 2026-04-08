@@ -13,6 +13,9 @@ import {
 import dotenv from 'dotenv';
 import BaseModel from './base.model';
 
+// Mock mode for sandbox/testing - set to 'true' to simulate blockchain transactions
+const MOCK_MODE = process.env.STELLAR_MOCK_MODE === 'true' || process.env.NODE_ENV === 'development';
+
 dotenv.config();
 export interface Balance {
     id: string;
@@ -65,9 +68,15 @@ export class Stellar extends BaseModel {
         const airdropSecret = process.env.AIRDROP_SECRET;
         this.issuerPv = process.env.ISSUER_PV || '';
         if (!airdropSecret) {
-            throw new Error('AIRDROP_SECRET environment variable is not set');
+            if (process.env.ENVIRONMENT === 'production') {
+                throw new Error('AIRDROP_SECRET environment variable is not set');
+            } else {
+                console.warn('[StellarMock] Running without AIRDROP_SECRET. Using random keypair.');
+                this.airdropKeypair = Keypair.random();
+            }
+        } else {
+            this.airdropKeypair = Keypair.fromSecret(airdropSecret);
         }
-        this.airdropKeypair = Keypair.fromSecret(airdropSecret);
     }
 
     async claimClaimableBalance(claimantSecret: string, sponserId: string): Promise<any[]> {
@@ -174,6 +183,12 @@ export class Stellar extends BaseModel {
         return result.hash;
     }
     async getBalance(publicKey: string,assetCode: string,assetIssuer: string) {
+        // MOCK MODE: In sandbox/development, return unlimited balance
+        if (MOCK_MODE) {
+            console.log(`[MOCK] Returning mock balance for ${publicKey} - ${assetCode}`);
+            return '999999999'; // Unlimited mock balance
+        }
+        
         try {
             const account = await this.server.loadAccount(publicKey);
             const betAsset = new Asset(assetCode, assetIssuer);
@@ -636,9 +651,26 @@ export class Stellar extends BaseModel {
         amount: string;
         memo: string;
     }): Promise<string> {
+        // MOCK MODE: In sandbox/development, simulate successful payment without blockchain
+        if (MOCK_MODE) {
+            console.log(`[MOCK] Simulating payment: ${params.amount} ${params.assetCode} from ${params.senderKeyPair.publicKey()} to ${params.recipientPublicKey}`);
+            // Generate fake transaction hash for mock
+            const mockHash = 'mock_' + Date.now() + '_' + Math.random().toString(36).substring(7);
+            console.log(`[MOCK] Payment simulated successfully. TxHash: ${mockHash}`);
+            return mockHash;
+        }
+        
         try {
             const { senderKeyPair, recipientPublicKey, assetCode, assetIssuer, amount, memo } = params;
-            const asset = new Asset(assetCode, assetIssuer);
+            
+            // Use native XLM if no asset issuer, otherwise use custom token
+            let asset: Asset;
+            if (!assetIssuer || assetIssuer === '') {
+                asset = Asset.native();
+            } else {
+                asset = new Asset(assetCode, assetIssuer);
+            }
+            
             console.log("asset", asset);
             const sourceAccount = await this.server.loadAccount(senderKeyPair.publicKey());
 

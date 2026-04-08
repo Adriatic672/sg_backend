@@ -22,6 +22,7 @@ router.post('/deleteTask', applyJWTConditionally, deleteTask);
 router.post('/updateTask/:id', applyJWTConditionally, updateTask);
 router.get('/getStats', applyJWTConditionally, getStats);
 router.get('/getUserGrowth', applyJWTConditionally, getusers);
+router.get('/getApplicationsPerCampaign', applyJWTConditionally, getApplicationsPerCampaign);
 router.get('/getWalletStats', applyJWTConditionally, getWalletStats);
 router.get('/getWallets/:currency', applyJWTConditionally, getWallets);
 router.get('/adminWallets', applyJWTConditionally, adminWallets);
@@ -640,6 +641,15 @@ async function getStats(req: Request, res: Response) {
     res.status(200).json(result);
   } catch (error) {
     res.status(500).json({ message: 'Error viewing users', error });
+  }
+}
+
+async function getApplicationsPerCampaign(req: Request, res: Response) {
+  try {
+    const result = await companyServices.getApplicationsPerCampaign();
+    res.status(200).json(result);
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching applications per campaign', error });
   }
 }
 

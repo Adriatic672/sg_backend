@@ -45,8 +45,8 @@ export default class SocialModel extends Model {
             tokenUrl: 'https://open.tiktokapis.com/v2/oauth/token/',
             revokeUrl: 'https://open.tiktokapis.com/v2/oauth/revoke/',
             clientKey: process.env.TIKTOK_CLIENT_ID || process.env.TIKTOK_CLIENT_KEY || "",
-            clientSecret: process.env.TIKTOK_SECRET || "",
-            redirectUri: process.env.REDIRECT_URI || "https://app.socialgems.me/oauth2redirect",
+            clientSecret: process.env.TIKTOK_CLIENT_SECRET || process.env.TIKTOK_SECRET || "",
+            redirectUri: process.env.TIKTOK_REDIRECT_URI || process.env.REDIRECT_URI || "https://app.socialgems.me/oauth2redirect",
         });
 
         this.platforms.set('x', {
@@ -59,13 +59,25 @@ export default class SocialModel extends Model {
             redirectUri: process.env.X_REDIRECT_URI || process.env.TWITTER_REDIRECT_URI || "socialgems://app.socialgems.me",
         });
 
+
+        this.platforms.set('facebook', {
+            name: 'Facebook',
+            authUrl: 'https://www.facebook.com/v19.0/dialog/oauth',
+            tokenUrl: 'https://graph.facebook.com/v19.0/oauth/access_token',
+            revokeUrl: '',
+            clientKey: process.env.FACEBOOK_CLIENT_ID || process.env.INSTA_PROD_CLIENTKEY || process.env.INSTAGRAM_CLIENT_ID || "",
+            clientSecret: process.env.FACEBOOK_CLIENT_SECRET || process.env.INSTA_PROD_SECRETKEY || process.env.INSTAGRAM_CLIENT_SECRET || "",
+            redirectUri: process.env.REDIRECT_URI || "https://app.socialgems.me/oauth2redirect",
+        });
+
         this.platforms.set('instagram', {
             name: 'Instagram',
-            authUrl: 'https://www.instagram.com/oauth/authorize',
+            // Instagram API with Instagram Login - for Creator/Business accounts
+            authUrl: 'https://api.instagram.com/oauth/authorize',
             tokenUrl: 'https://api.instagram.com/oauth/access_token',
-            revokeUrl: 'https://graph.instagram.com/oauth/revoke',
-            clientKey: process.env.INSTAGRAM_CLIENT_ID || "",
-            clientSecret: process.env.INSTAGRAM_CLIENT_SECRET || "",
+            revokeUrl: 'https://graph.instagram.com/me/permissions',
+            clientKey: process.env.INSTA_PROD_CLIENTKEY || process.env.INSTAGRAM_CLIENT_ID || "",
+            clientSecret: process.env.INSTA_PROD_SECRETKEY || process.env.INSTAGRAM_CLIENT_SECRET || "",
             redirectUri: process.env.REDIRECT_URI || "https://app.socialgems.me/oauth2redirect",
         });
     }
@@ -78,12 +90,20 @@ export default class SocialModel extends Model {
                 return this.initXAuth(userId);
             case 'instagram':
                 return this.initInstagramAuth(userId);
+            case 'facebook':
+                return this.initFacebookAuth(userId);
         }
     }
 
     async initTikTokAuth(userId: string) {
         try {
             const config = this.platforms.get('tiktok')!;
+            
+            console.log('=== TIKTOK AUTH DEBUG ===');
+            console.log('Client Key:', config.clientKey ? config.clientKey.substring(0, 8) + '...' : 'MISSING');
+            console.log('Redirect URI:', config.redirectUri);
+            console.log('========================');
+            
             const scopes = ["user.info.basic", "user.info.profile", "user.info.stats"];
 
             const state = this.generateState();
@@ -133,12 +153,32 @@ export default class SocialModel extends Model {
                     return this.completeVerification(instagram_token, body);
                 }
                 return this.makeResponse(500, "Failed to get Instagram tokens");
+            case 'facebook':
+                const facebook_token: any = await this.handleFacebookCallback(code, state);
+                console.log("Facebook tokens", facebook_token);
+                if (facebook_token) {
+                    return this.completeVerification(facebook_token, body);
+                }
+                return this.makeResponse(500, "Failed to get Facebook tokens");
         }
     }
 
     async completeVerification(token: any, body: any) {
         const postdata = body;
-        postdata.token = token;
+        // Handle both string token and object token with user_id
+        if (typeof token === 'object' && token.access_token) {
+            postdata.token = token.access_token;
+            postdata.user_id = token.user_id || body.user_id;
+            postdata.userId = token.user_id || body.user_id; // Add camelCase version
+            postdata.site_id = token.site_id || body.site_id;
+            postdata.site_name = token.site_name || body.site_name;
+        } else {
+            postdata.token = token;
+            postdata.userId = body.user_id; // Add camelCase version
+            postdata.site_id = body.site_id;
+            postdata.site_name = body.site_name;
+        }
+        console.log('completeVerification postdata:', postdata);
         return await new AccountModel().socialSignOn(postdata);
     }
 
@@ -161,6 +201,8 @@ export default class SocialModel extends Model {
                 return this.disconnectX(access_token, userId);
             case 'instagram':
                 return this.disconnectInstagram(access_token, userId);
+            case 'facebook':
+                return this.disconnectFacebook(access_token, userId);
         }
     }
 
@@ -168,7 +210,17 @@ export default class SocialModel extends Model {
         try {
             const tokens = await this.exchangeTikTokTokens(code, state);
             console.log("TikTok tokens", tokens);
-            return tokens.access_token;
+            
+            // Get site_id for TikTok
+            const site: any = await this.getsiteByName('tiktok');
+            const site_id = site.length > 0 ? site[0].site_id : null;
+            
+            return {
+                access_token: tokens.access_token,
+                user_id: tokens.user_id,
+                site_id: site_id,
+                site_name: 'tiktok'
+            };
         } catch (error) {
             console.log("TikTok callback error", error);
             return null;
@@ -264,46 +316,78 @@ export default class SocialModel extends Model {
 
     async initInstagramAuth(userId: string) {
         try {
-            const config = this.platforms.get('instagram')!;
+            // For Instagram, we use RapidAPI instead of OAuth (since Meta deprecated their API)
+            // We'll ask the user to enter their Instagram username
+            console.log('Instagram Auth: Using RapidAPI for Instagram data');
 
-            console.log('Instagram Config Debug:', {
-                clientKey: config.clientKey ? `${config.clientKey.substring(0, 8)}...` : 'Missing',
-                fullClientKey: config.clientKey, // Full client key for debugging
-                redirectUri: config.redirectUri,
-                authUrl: config.authUrl
-            });
-
-            // First, let's try a simple test URL without scopes
-            const testUrl = `${config.authUrl}?client_id=${config.clientKey}&response_type=code&redirect_uri=${encodeURIComponent(config.redirectUri)}`;
-            console.log('Instagram Test URL (no scopes):', testUrl);
-
-            // Instagram Basic Display API scopes (NOT Business API)
-            const scopes = ['user_profile', 'user_media', 'instagram_business_basic'];
-            //            const scopes = ['instagram_business_basic'];
-
-            const state = this.generateState();
-
-            // Instagram Basic Display doesn't support PKCE, use simple OAuth
-            await this.saveOAuthState('instagram', state, userId, '');
-
-            const url =
-                `${config.authUrl}?client_id=${config.clientKey}` +
-                `&response_type=code` +
-                `&scope=${encodeURIComponent(scopes.join(','))}` +
-                `&redirect_uri=${encodeURIComponent(config.redirectUri)}` +
-                `&state=${encodeURIComponent(state)}`;
-
-            console.log('Instagram Auth URL:', url);
             return this.makeResponse(200, "success", {
-                authUrl: url,
-                testUrl: testUrl, // Return both URLs for testing
+                authUrl: null,
+                method: 'username', // User will enter username instead of OAuth
+                message: 'Please enter your Instagram username to connect',
                 debug: {
-                    clientId: config.clientKey,
-                    redirectUri: config.redirectUri
+                    platform: 'instagram',
+                    method: 'rapidapi'
                 }
             });
         } catch (error) {
             return this.makeResponse(500, `Failed to initialize Instagram auth: ${error}`);
+        }
+    }
+
+    // New method to connect Instagram using username (via RapidAPI)
+    async connectInstagramWithUsername(userId: string, username: string) {
+        try {
+            const RapidInstagram = require('../thirdparty/Rapid.Instagram').default;
+            const instagramAPI = new RapidInstagram();
+            
+            console.log('Connecting Instagram with username:', username);
+            
+            // Get user info from RapidAPI
+            const userInfo = await instagramAPI.getUserInfo(username);
+            console.log('Instagram user info:', userInfo);
+            
+            if (!userInfo || !userInfo.user) {
+                return this.makeResponse(400, "Failed to find Instagram user");
+            }
+            
+            // Store the Instagram connection
+            const tokenData = {
+                access_token: username, // Use username as token for RapidAPI
+                username: username,
+                user_id: userInfo.user.id,
+                followers_count: userInfo.user.followers_count,
+                verified: userInfo.user.verified,
+                platform: 'instagram',
+                connected_at: new Date().toISOString()
+            };
+            
+            // Remove any existing Instagram connection for this user first
+            const existingSite: any = await this.getsiteByName('instagram');
+            if (existingSite && existingSite.length > 0) {
+                const siteId = existingSite[0].site_id;
+                await this.deleteData('sm_site_users', `user_id='${userId}' AND site_id='${siteId}'`);
+                await this.deleteData('social_tokens', `platform='instagram' AND userId='${userId}'`);
+                await this.insertData('sm_site_users', {
+                    user_id: userId,
+                    site_id: siteId,
+                    username: username,
+                    followers: userInfo.user.followers_count,
+                    is_verified: userInfo.user.verified ? 'yes' : 'no',
+                    created_on: new Date()
+                });
+            }
+
+            await this.storeSocialTokens('instagram', userId, tokenData as any);
+            
+            return this.makeResponse(200, "success", {
+                message: 'Instagram connected successfully',
+                username: username,
+                userId: userInfo.user.id,
+                followers: userInfo.user.followers_count
+            });
+        } catch (error) {
+            console.error('Instagram username connection error:', error);
+            return this.makeResponse(500, `Failed to connect Instagram: ${error}`);
         }
     }
 
@@ -343,6 +427,102 @@ export default class SocialModel extends Model {
         } catch (error) {
             return this.makeResponse(500, `Failed to disconnect Instagram: ${error}`);
         }
+    }
+
+
+    async initFacebookAuth(userId: string) {
+        try {
+            const config = this.platforms.get('facebook')!;
+            // Use basic scopes that don't require app review for local testing
+            // For production with Pages features, you'll need app review approval
+            const scopes = ['public_profile', 'email'];
+            const state = this.generateState();
+            await this.saveOAuthState('facebook', state, userId, '');
+
+            const url =
+                `${config.authUrl}?client_id=${config.clientKey}` +
+                `&response_type=code` +
+                `&scope=${encodeURIComponent(scopes.join(','))}` +
+                `&redirect_uri=${encodeURIComponent(config.redirectUri)}` +
+                `&state=${encodeURIComponent(state)}`;
+
+            console.log('=== FACEBOOK AUTH URL ===');
+            console.log('Redirect URI:', config.redirectUri);
+            console.log('Full Auth URL:', url);
+            console.log('========================');
+
+            return this.makeResponse(200, "success", { authUrl: url });
+        } catch (error) {
+            return this.makeResponse(500, `Failed to initialize Facebook auth: ${error}`);
+        }
+    }
+
+    async handleFacebookCallback(code: string, state: string) {
+        try {
+            const tokens = await this.exchangeFacebookTokens(code, state);
+            console.log("Facebook tokens", tokens);
+            
+            // Get site_id for Facebook
+            const site: any = await this.getsiteByName('facebook');
+            console.log("Facebook site lookup:", site);
+            const site_id = site && site.length > 0 ? site[0].site_id : 3; // Default to 3 if not found
+            
+            console.log("Facebook callback returning:", {
+                access_token: tokens.access_token ? 'present' : 'missing',
+                user_id: tokens.user_id,
+                site_id: site_id,
+                site_name: 'facebook'
+            });
+            
+            return {
+                access_token: tokens.access_token,
+                user_id: tokens.user_id, // From OAuth state
+                site_id: site_id,
+                site_name: 'facebook'
+            };
+        } catch (error) {
+            console.log("Facebook callback error", error);
+            return null;
+        }
+    }
+
+    async disconnectFacebook(accessToken: string, userId: string) {
+        try {
+            await this.removeSocialTokens('facebook', accessToken, userId);
+            return this.makeResponse(200, "success", { message: 'Facebook disconnected successfully' });
+        } catch (error) {
+            return this.makeResponse(500, `Failed to disconnect Facebook: ${error}`);
+        }
+    }
+
+    private async exchangeFacebookTokens(code: string, state: string): Promise<SocialTokens> {
+        const config = this.platforms.get('facebook')!;
+        
+        // Load OAuth state to get userId
+        const rec: any = await this.loadAndDeleteOAuthState('facebook', state);
+        if (!rec) throw new Error("Invalid or expired state");
+
+        const resp = await axios.get(config.tokenUrl, {
+            params: {
+                client_id: config.clientKey,
+                client_secret: config.clientSecret,
+                redirect_uri: config.redirectUri,
+                code,
+            },
+            timeout: 10000,
+        });
+
+        if (resp.data.error) {
+            throw new Error(`Facebook OAuth error: ${resp.data.error.message}`);
+        }
+
+        await this.storeSocialTokens('facebook', state, resp.data);
+        
+        // Add userId from state record
+        return {
+            ...resp.data,
+            user_id: rec.userId
+        } as SocialTokens;
     }
 
     private generateState(): string {
@@ -398,7 +578,11 @@ export default class SocialModel extends Model {
             timeout: 10000,
         });
 
-        return resp.data as SocialTokens;
+        // Add userId from state record to the response
+        return {
+            ...resp.data,
+            user_id: rec.userId
+        } as SocialTokens;
     }
 
     private async refreshTikTokTokens(refreshToken: string): Promise<SocialTokens> {
@@ -512,7 +696,8 @@ export default class SocialModel extends Model {
             clientKey: config.clientKey ? 'Set' : 'Missing',
             clientSecret: config.clientSecret ? 'Set' : 'Missing',
             code: code ? 'Set' : 'Missing',
-            redirectUri: config.redirectUri
+            redirectUri: config.redirectUri,
+            tokenUrl: config.tokenUrl
         });
 
         const body = qs.stringify({
@@ -534,8 +719,35 @@ export default class SocialModel extends Model {
             const errorMsg = resp.data.error_message || resp.data.error_description || resp.data.error;
             throw new Error(`Instagram OAuth error: ${errorMsg}`);
         }
-        await this.storeSocialTokens('instagram', state, resp.data);
-        return resp.data as SocialTokens;
+
+        // For Instagram Basic Display API
+        const accessToken = resp.data.access_token;
+        
+        // Get Instagram user info
+        try {
+            const igUserResp = await axios.get('https://graph.instagram.com/me', {
+                params: {
+                    fields: 'id,username,account_type,followers_count,media_count',
+                    access_token: accessToken
+                }
+            });
+            console.log('Instagram User Info:', igUserResp.data);
+            
+            // Store both tokens
+            const tokenData = {
+                ...resp.data,
+                instagram_user_id: igUserResp.data.id,
+                instagram_username: igUserResp.data.username,
+                account_type: igUserResp.data.account_type
+            };
+            await this.storeSocialTokens('instagram', state, tokenData);
+            return tokenData as SocialTokens;
+        } catch (igError: any) {
+            console.log('Instagram user info error:', igError.response?.data || igError.message);
+            // Fallback: store the token anyway
+            await this.storeSocialTokens('instagram', state, resp.data);
+            return resp.data as SocialTokens;
+        }
     }
 
     private async refreshInstagramTokens(refreshToken: string, config: SocialPlatform): Promise<SocialTokens> {
@@ -594,6 +806,5 @@ export default class SocialModel extends Model {
             const site_id = site[0].site_id;
             await this.deleteData("sm_site_users", `user_id='${userId}' AND site_id='${site_id}'`);
         }
-        await this.deleteData("sm_site_users", `user_id='${userId}' AND site_id='${platform}'`);
     }
 }

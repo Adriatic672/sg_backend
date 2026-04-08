@@ -2,6 +2,10 @@ import mysql from 'mysql2/promise';
 import fs from 'fs';
 import path from 'path';
 import { promisify } from 'util';
+import dotenv from 'dotenv';
+
+// Load environment variables from .env file
+dotenv.config();
 
 const readdir = promisify(fs.readdir);
 const readFile = promisify(fs.readFile);
@@ -57,7 +61,9 @@ class MigrationRunner {
 
       for (const statement of statements) {
         if (statement.trim()) {
-          await this.connection.execute(statement);
+          // Use query() instead of execute() to avoid prepared statement protocol issues
+          // with DDL statements like ALTER TABLE
+          await this.connection.query(statement);
         }
       }
 

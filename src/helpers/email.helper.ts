@@ -2,23 +2,32 @@ import nodemailer from 'nodemailer';
 import { Transporter, SendMailOptions } from 'nodemailer';
 
 export default class EmailSender {
-    private transporter: Transporter;
+    private transporter: Transporter | null = null;
 
     constructor() {
-        this.transporter = nodemailer.createTransport({
-            host: process.env.SMTP_HOST, // Mailgun's SMTP host
-            port: 587, // Port for Mailgun (587 for TLS)
-            secure: false, // Use TLS but not SSL
-            requireTLS: true, // Forces TLS for the connection
-            auth: {
-                user: process.env.MAILGUN_SMTP_USER, // Your Mailgun SMTP user
-                pass: process.env.MAILGUN_SMTP_PASSWORD, // Your Mailgun SMTP password
-            },
-            logger: true, // Log information during sending
-        });
+        const host = process.env.SMTP_HOST;
+        const user = process.env.MAILGUN_SMTP_USER || process.env.SMTP_USER;
+        const pass = process.env.MAILGUN_SMTP_PASSWORD || process.env.SMTP_PASS;
+        const port = Number(process.env.SMTP_PORT) || 2525;
+
+        if (host && user && pass) {
+            this.transporter = nodemailer.createTransport({
+                host,
+                port,
+                secure: false,
+                requireTLS: false,
+                auth: { user, pass },
+                logger: true,
+            });
+        }
     }
 
     async sendMail(to: string, subject: string, heading: string, body: string) {
+        if (!this.transporter) {
+            console.log(`[MockEmail] To: ${to} | Subject: ${subject}`);
+            return true;
+        }
+
         const html = this.createHtmlEmail(heading, body);
         let envSubject = process.env.TABLE_IDENTIFIER
         if (envSubject == "stage") {
@@ -35,7 +44,7 @@ export default class EmailSender {
         };
 
         try {
-            const info = await this.transporter.sendMail(mailOptions);
+            const info = await this.transporter!.sendMail(mailOptions);
             console.log('Message sent: %s', info.messageId);
             return true;
         } catch (error) {

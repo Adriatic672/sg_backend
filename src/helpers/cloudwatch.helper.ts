@@ -26,20 +26,25 @@ class CloudWatchLogger {
 
   constructor() {
     // Initialize CloudWatch client
+    const accessKeyId = process.env.AWS_ACCESS_KEY_ID;
+    const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
+    const credentials = (accessKeyId && secretAccessKey) ? { accessKeyId, secretAccessKey } : undefined;
+
     this.client = new CloudWatchLogsClient({
       region: process.env.AWS_REGION || 'us-east-1',
-      credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
-      },
+      credentials,
     });
 
     const env = process.env.TABLE_IDENTIFIER || 'dev';
     this.logGroupName = `/aws/socialgems/${env}`;
     this.logStreamName = `api-${new Date().toISOString().split('T')[0]}-${Math.random().toString(36).substring(7)}`;
-    
-    this.initializeLogGroup();
-    this.startFlushTimer();
+
+    const hasCredentials = process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY;
+    const isProduction = process.env.ENVIRONMENT === 'production';
+    if (hasCredentials && isProduction) {
+      this.initializeLogGroup();
+      this.startFlushTimer();
+    }
   }
 
   private async initializeLogGroup() {
@@ -82,6 +87,10 @@ class CloudWatchLogger {
 
   private async flushLogs() {
     if (this.logBuffer.length === 0) return;
+    if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
+      this.logBuffer = [];
+      return;
+    }
 
     try {
       // CloudWatch limits: 1MB per batch, max 10,000 events per batch
@@ -192,6 +201,21 @@ class CloudWatchLogger {
   }
 
   public log(entry: LogEntry) {
+    // MOCK: In development, log directly to console and skip CloudWatch buffering
+    if (process.env.ENVIRONMENT !== 'production') {
+      const { level, message, error, meta } = entry;
+      const prefix = `[CW-${level.toUpperCase()}]`;
+      
+      if (level === 'error') {
+        console.error(prefix, message, error || '', meta ? JSON.stringify(meta) : '');
+      } else if (level === 'warn') {
+        console.warn(prefix, message, meta ? JSON.stringify(meta) : '');
+      } else {
+        console.log(prefix, message, meta ? JSON.stringify(meta) : '');
+      }
+      return;
+    }
+
     // Skip logging in test environment unless explicitly enabled
     if (process.env.NODE_ENV === 'test' && process.env.LOG_TO_CLOUDWATCH !== 'true') {
       return;

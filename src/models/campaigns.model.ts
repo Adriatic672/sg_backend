@@ -1,20 +1,26 @@
 import Model from "../helpers/model";
 import { subscribeToTopic, unsubscribeFromTopic } from '../helpers/FCM';
 import { getItem, setItem } from "../helpers/connectRedis";
-import { uploadToS3 } from '../helpers/S3UploadHelper';
 import { calculateWeightedScore } from "../helpers/campaign.helper";
 import * as crypto from 'crypto';
 import { logger } from '../utils/logger';
 import Groups from "./groups.model";
+import Stellar from "../helpers/Stellar";
+import * as StellarSdk from 'stellar-sdk';
+import { UserStellarService } from '../helpers/UserStellarService';
 
 const applicationStatus = ['pending', 'accepted', 'rejected'];
 
 export default class Campaigns extends Model {
   private groupsModel: Groups;
+  private userStellarService: UserStellarService;
+  private stellar: Stellar;
 
   constructor() {
     super();
     this.groupsModel = new Groups();
+    this.userStellarService = new UserStellarService();
+    this.stellar = new Stellar();
   }
 
 
@@ -246,7 +252,7 @@ export default class Campaigns extends Model {
       const user_id = approvedUsers[i].user_id;
       const response = await this.addMember({ groupId: groupId, userId: user_id, addedBy: createdBy })
       this.logOperation("INVITE_MEMBER", groupId, user_id, createdBy, response)
-      this.sendAppNotification(user_id, "CAMPAIGN_ACTIVATED", campaignTitle)
+      this.sendAppNotification(user_id, "CAMPAIGN_ACTIVATED", campaignTitle, "", "", "", "CAMPAIGN", createdBy)
     }
     return true;
   }
@@ -358,7 +364,7 @@ export default class Campaigns extends Model {
         if (creatorEmail) {
           this.sendEmail("CAMPAIGN_ADMIN_COMPLETED", creatorEmail, userTitle);
         }
-        this.sendAppNotification(created_by, "CAMPAIGN_ADMIN_COMPLETED");
+        this.sendAppNotification(created_by, "CAMPAIGN_ADMIN_COMPLETED", "", "", "", "", "CAMPAIGN", userId);
       } catch (error) {
         logger.error("activityComplete-5", error);
       }
@@ -395,7 +401,9 @@ export default class Campaigns extends Model {
         { action_status: 'rejected' }
       );
 
-      this.sendAppNotification(user_id, "SUBMISSION_REJECTED");
+      const campaign = await this.getCampaignByIdAnyStatus(campaign_id);
+      if (campaign.length === 0) { throw new Error("Campaign not found"); }
+      this.sendAppNotification(user_id, "SUBMISSION_REJECTED", "", "", "", "", "CAMPAIGN", campaign[0].created_by);
 
       return this.makeResponse(200, "Task submission rejected successfully");
     } catch (error) {
@@ -411,10 +419,29 @@ export default class Campaigns extends Model {
   async getCampaignStats(campaignId: string) {
     try {
       const response: any = await this.callQuerySafe(`
-        SELECT invite_status , action_status
-        FROM act_campaign_invites i 
+        SELECT i.invite_status, i.action_status, c.budget, c.title, c.objective, c.start_date, c.end_date
+        FROM act_campaign_invites i
         INNER JOIN act_campaigns c ON i.campaign_id = c.campaign_id
-        WHERE i.campaign_id = '${campaignId}'       `);
+        WHERE i.campaign_id = '${campaignId}'`);
+
+      // Fetch campaign info even if no invites yet
+      const campaignInfo: any = await this.callQuerySafe(`
+        SELECT budget, title, objective, start_date, end_date
+        FROM act_campaigns WHERE campaign_id = '${campaignId}'`);
+
+      const budget = campaignInfo[0]?.budget ?? 0;
+      const campaignTitle = campaignInfo[0]?.title ?? '';
+      const campaignObjective = campaignInfo[0]?.objective ?? '';
+      const startDate = campaignInfo[0]?.start_date ?? null;
+      const endDate = campaignInfo[0]?.end_date ?? null;
+
+      // Fetch total paid out for this campaign
+      const paymentsResult: any = await this.callQuerySafe(`
+        SELECT COALESCE(SUM(amount_paid), 0) AS total_spent
+        FROM campaign_payments_users
+        WHERE campaign_id = '${campaignId}' AND trans_status = 'SUCCESS'`);
+
+      const budgetSpent = parseFloat(paymentsResult[0]?.total_spent ?? 0);
 
       let invited = response.length;
       let accepted = 0, rejected = 0, started = 0, completed = 0;
@@ -422,28 +449,14 @@ export default class Campaigns extends Model {
       response.forEach((row: any) => {
         const status = row.invite_status.toLowerCase();
         const action_status = row.action_status.toLowerCase();
-        const count = 1
 
         switch (action_status) {
-          case 'started':
-            started += count;
-            break;
-          case 'completed':
-            completed += count;
-            break;
-          default:
-            break;
+          case 'started': started++; break;
+          case 'completed': completed++; break;
         }
-
         switch (status) {
-          case 'accepted':
-            accepted += count;
-            break;
-          case 'rejected':
-            rejected += count;
-            break;
-          default:
-            break;
+          case 'accepted': accepted++; break;
+          case 'rejected': rejected++; break;
         }
       });
 
@@ -452,6 +465,12 @@ export default class Campaigns extends Model {
 
       const campaignStats = {
         campaignId,
+        campaignTitle,
+        campaignObjective,
+        startDate,
+        endDate,
+        budget: parseFloat(budget),
+        budgetSpent,
         invited,
         accepted,
         rejected,
@@ -483,15 +502,25 @@ export default class Campaigns extends Model {
       `);
 
       const totalEarnings: any = await this.callQuerySafe(`
-        SELECT SUM(amount_paid) AS total 
-        FROM campaign_payments_users 
+        SELECT SUM(amount_paid) AS total
+        FROM campaign_payments_users
         WHERE user_id = '${userId}' AND trans_status = 'SUCCESS'
       `);
+
+      const jobBoardEarnings: any = await this.callQuerySafe(`
+        SELECT SUM(amount) AS total
+        FROM wl_transactions
+        WHERE user_id = '${userId}' AND trans_type = 'CR'
+        AND system_status = 'SUCCESS' AND op_type = 'JOB_PAYMENT'
+      `);
+
+      const totalEarningsAmount = (parseFloat(totalEarnings[0]?.total) || 0)
+        + (parseFloat(jobBoardEarnings[0]?.total) || 0);
 
       return this.makeResponse(200, "success", {
         completed_campaigns: completedCampaigns[0]?.count || 0,
         pending_campaigns: pendingCampaigns[0]?.count || 0,
-        total_earnings: totalEarnings[0]?.total || 0
+        total_earnings: totalEarningsAmount
       });
     } catch (error) {
       console.error("Error in influencerStats:", error);
@@ -504,18 +533,45 @@ export default class Campaigns extends Model {
     const hiredCount: any = await this.callQuerySafe(`select  count(*) as count from act_campaign_invites  where  invited_by = '${userId}' and action_status='completed'  `)
     const paidCount: any = await this.callQuerySafe(`select  count(*) as count from act_campaign_invites  where  invited_by = '${userId}' and pay_status='paid'  `)
 
+    // Also count job board accepted/completed jobs - count DISTINCT influencers (creator_id)
+    const jobBoardHiredCount: any = await this.callQuerySafe(`
+      SELECT COUNT(DISTINCT creator_id) as count FROM jb_job_interests ji
+      JOIN jb_job_posts j ON j.job_id = ji.job_id
+      WHERE j.brand_id = '${userId}' AND ji.status IN ('accepted', 'work_done', 'completed')
+    `)
+
+    // Count total jobs (not unique influencers)
+    const jobBoardJobsCount: any = await this.callQuerySafe(`
+      SELECT COUNT(*) as count FROM jb_job_interests ji
+      JOIN jb_job_posts j ON j.job_id = ji.job_id
+      WHERE j.brand_id = '${userId}' AND ji.status IN ('accepted', 'work_done', 'completed')
+    `)
+
     const actedUsersArray = await this.callQuerySafe(`select i.invite_status, i.action_status,i.action_date, p.first_name, p.last_name,p.profile_pic from act_campaign_invites i INNER JOIN users_profile p ON  i.user_id = p.user_id where  invited_by = '${userId}' and action_status='completed'  LIMIT 5 `)
     const totalCampaigns = acceptedUsersCount[0].count || 0
     const paid = paidCount[0].count || 0
     const completed = hiredCount[0].count || 0
+    const uniqueJobBoardInfluencers = jobBoardHiredCount[0].count || 0
+    const jobBoardJobs = jobBoardJobsCount[0].count || 0
     const users = actedUsersArray
     const spentInfo: any = await this.callQuerySafe(`select sum(amount_spent) as amount from campaign_payments  where  created_by = '${userId}'  `)
-    const spent = spentInfo[0].amount || 0
+    const campaignSpentInfo: any = await this.callQuerySafe(`select sum(amount_spent) as amount from act_campaigns where created_by = '${userId}' `)
+    const jobBoardSpentInfo: any = await this.callQuerySafe(`
+      SELECT SUM(amount) AS amount FROM wl_transactions
+      WHERE user_id = '${userId}' AND trans_type = 'DR'
+      AND system_status = 'SUCCESS' AND op_type = 'JOB_PAYMENT'
+    `)
+    const spent = (parseFloat(spentInfo[0].amount) || 0)
+      + (parseFloat(campaignSpentInfo[0].amount) || 0)
+      + (parseFloat(jobBoardSpentInfo[0].amount) || 0)
 
     return this.makeResponse(200, "success", {
       total_campaigns: totalCampaigns,
       actioned_users_top: users,
-      total_completed_users: completed,
+      total_completed_users: completed + uniqueJobBoardInfluencers,
+      total_completed_campaigns: completed,
+      total_completed_jobs: jobBoardJobs,
+      total_unique_influencers: uniqueJobBoardInfluencers,
       total_paid_users: paid,
       total_amount_spent: spent
     });
@@ -571,6 +627,26 @@ INNER JOIN act_campaigns c ON i.campaign_id = c.campaign_id
 INNER JOIN business_profile p ON c.created_by = p.business_id
 WHERE i.user_id = '${userId}' AND i.invite_status = '${status}' AND i.application_status = 'approved'
 `);
+    return this.makeResponse(200, "success", response);
+  }
+
+  async exploreCampaigns(userId: string) {
+    // Returns all visible campaigns with invite status for this user
+    const response = await this.callQuerySafe(`
+      SELECT
+        c.campaign_id, c.title, c.description, c.objective, c.image_urls,
+        c.start_date, c.end_date, c.status, c.budget, c.number_of_influencers,
+        c.earning_type,
+        p.name AS brand_name, p.logo AS brand_logo,
+        CASE WHEN c.status = 'open_to_applications' THEN 1 ELSE 0 END AS is_open,
+        CASE WHEN i.invite_id IS NOT NULL THEN 1 ELSE 0 END AS is_invited,
+        i.invite_status, i.action_status
+      FROM act_campaigns c
+      INNER JOIN business_profile p ON c.created_by = p.business_id
+      LEFT JOIN act_campaign_invites i ON c.campaign_id = i.campaign_id AND i.user_id = '${userId}'
+      WHERE c.status IN ('active', 'open_to_applications')
+      ORDER BY c.created_on DESC
+    `);
     return this.makeResponse(200, "success", response);
   }
 
@@ -1037,8 +1113,8 @@ GROUP BY c.campaign_id;
         return this.makeResponse(404, `You need atleast USD ${grossBudget} to invite users`);
       }
 
-      let crWalletId: any = process.env.ESCROW_WALLET
-      let feeWallet: any = process.env.FEE_WALLET
+      let crWalletId: any = (process.env.ESCROW_WALLET && process.env.ESCROW_WALLET !== 'undefined') ? process.env.ESCROW_WALLET : "ESCROW000000";
+      let feeWallet: any = (process.env.FEE_WALLET && process.env.FEE_WALLET !== 'undefined') ? process.env.FEE_WALLET : "FEE000000";
 
       const refid = campaign_id
 
@@ -1082,7 +1158,7 @@ GROUP BY c.campaign_id;
           console.log("newCampaignInvite", newCampaignInvite);
 
           await this.insertData("act_campaign_invites", newCampaignInvite);
-          this.sendAppNotification(user.user_id, "INVITE_TO_CAMPAIGN");
+          this.sendAppNotification(user.user_id, "INVITE_TO_CAMPAIGN", "", "", "", "", "CAMPAIGN", userId);
 
         } catch (error) {
           console.error("Error in inviteUsers:", error);
@@ -1098,7 +1174,7 @@ GROUP BY c.campaign_id;
  
 
       const transferObj1 = await this.walletTransfer(trans_id, userId, crWalletId, "TRANSFER", budget, 0, "USD", "INFLUENCER BUDGET", wallet_id, refid)
-      const transferObj = await this.walletTransfer(trans_id, "admin", feeWallet, "FEES", fee, 0, "USD", "CAMPAIGN CREATION FEE", wallet_id, refid)
+      const transferObj = await this.walletTransfer(trans_id, "admin", feeWallet, "FEE", fee, 0, "USD", "CAMPAIGN CREATION FEE", wallet_id, refid)
       logger.info("transferObj", transferObj)
       const status = transferObj.status
       if (status != 200) {
@@ -1198,8 +1274,8 @@ GROUP BY c.campaign_id;
         return this.makeResponse(404, `You need atleast USD ${grossBudget} to invite users`);
       }
 
-      let crWalletId: any = process.env.ESCROW_WALLET
-      let feeWallet: any = process.env.FEE_WALLET
+      let crWalletId: any = (process.env.ESCROW_WALLET && process.env.ESCROW_WALLET !== 'undefined') ? process.env.ESCROW_WALLET : "ESCROW000000";
+      let feeWallet: any = (process.env.FEE_WALLET && process.env.FEE_WALLET !== 'undefined') ? process.env.FEE_WALLET : "FEE000000";
 
       const refid = campaign_id
 
@@ -1242,7 +1318,7 @@ GROUP BY c.campaign_id;
           console.log("newCampaignInvite", newCampaignInvite);
 
           await this.insertData("act_campaign_invites", newCampaignInvite);
-          this.sendAppNotification(user.user_id, "INVITE_TO_CAMPAIGN");
+          this.sendAppNotification(user.user_id, "INVITE_TO_CAMPAIGN", "", "", "", "", "CAMPAIGN", userId);
 
         } catch (error) {
           console.error("Error in inviteUsers:", error);
@@ -1251,7 +1327,7 @@ GROUP BY c.campaign_id;
 
 
       const transferObj1 = await this.walletTransfer(trans_id, userId, crWalletId, "TRANSFER", amountLessFee, 0, "USD", "INFLUENCER BUDGET", wallet_id, refid)
-      const transferObj = await this.walletTransfer(trans_id, "admin", feeWallet, "FEES", fee, 0, "USD", "CAMPAIGN CREATION FEE", wallet_id, refid)
+      const transferObj = await this.walletTransfer(trans_id, "admin", feeWallet, "FEE", fee, 0, "USD", "CAMPAIGN CREATION FEE", wallet_id, refid)
       logger.info("transferObj", transferObj)
       const status = transferObj.status
       if (status != 200) {
@@ -1322,7 +1398,7 @@ GROUP BY c.campaign_id;
 
     if (status == "accepted") {
       this.addMember({ groupId: group_id, userId, addedBy: userId })
-      this.sendAppNotification(userId, "ACCEPT_INVITE");
+      this.sendAppNotification(userId, "ACCEPT_INVITE", "", "", "", "", "CAMPAIGN", campaign[0].created_by);
     }
 
     return this.makeResponse(200, `Invite ${status}`);
@@ -1408,7 +1484,7 @@ GROUP BY c.campaign_id;
         );
 
         for (const invite of acceptedUsers) {
-          this.sendAppNotification(invite.user_id, "APPLICATION_APPROVED");
+          this.sendAppNotification(invite.user_id, "APPLICATION_APPROVED", "", "", "", "", "CAMPAIGN", campaignData.created_by);
         }
       }
 
@@ -1430,7 +1506,7 @@ GROUP BY c.campaign_id;
         );
 
         for (const invite of rejectedUsers) {
-          this.sendAppNotification(invite.user_id, "APPLICATION_REJECTED");
+          this.sendAppNotification(invite.user_id, "APPLICATION_REJECTED", "", "", "", "", "CAMPAIGN", campaignData.created_by);
         }
       }
 
@@ -1456,15 +1532,16 @@ GROUP BY c.campaign_id;
 
       logger.info(`createCampaign`, data)
       console.log("createCampaignByUser", data)
-      const { title, role, userId, agentId, staffId, campaign_image, number_of_influencers, description, objective, requestId, start_date, end_date, budget, tasks } = data;
+      const { title, role, userId, agentId, staffId, campaign_image, number_of_influencers, description, objective, requestId, start_date, end_date, budget, tasks, earning_type } = data;
       const campaign_id = "cp" + this.getRandomString();
 
       if (!tasks || tasks.length === 0) {
         return this.makeResponse(400, "You need at least one task.");
       }
 
+      let final_campaign_image = campaign_image;
       if (!campaign_image || campaign_image.trim() === '') {
-        return this.makeResponse(400, "Campaign image is required.");
+        final_campaign_image = "https://images.unsplash.com/photo-1563986768609-322da13575f3?w=1600&q=80";
       }
 
       // Determine business_id, creator_type, and created_by_user_id based on role
@@ -1603,9 +1680,10 @@ GROUP BY c.campaign_id;
         start_date,
         objective,
         end_date,
-        image_urls: campaign_image,
+        image_urls: final_campaign_image,
         budget,
         number_of_influencers,
+        earning_type: earning_type || 'paid',
         status: "draft",
         business_id: finalBusinessId,
         created_by_user_id: created_by_user_id,
@@ -1716,6 +1794,11 @@ GROUP BY c.campaign_id;
         return this.makeResponse(400, `Cannot update campaign with status '${campaignData.status}'. Only draft campaigns can be updated.`);
       }
 
+      let final_campaign_image = campaign_image;
+      if (!campaign_image || campaign_image.trim() === '') {
+        final_campaign_image = campaignData.image_urls || "https://images.unsplash.com/photo-1563986768609-322da13575f3?w=1600&q=80";
+      }
+
       const fees: any = await this.getCampaignFees();
       const daily_fee = fees[0].daily_fee;
       //  const creation_fee = fees[0].creation_fee;
@@ -1787,7 +1870,7 @@ GROUP BY c.campaign_id;
         start_date,
         objective,
         end_date,
-        image_urls: campaign_image,
+        image_urls: final_campaign_image,
         budget,
         number_of_influencers
       };
@@ -2155,6 +2238,7 @@ GROUP BY c.campaign_id;
 
     let totalFee = 0;
     let totalPaid = 0;
+    const escrowSecret = process.env.ESCROW_SECRET_KEY;
 
     for (let i = 0; i < activityInfo.length; i++) {
       logger.info(`[payLog] Step 5.${i + 1}: Processing activity ${i + 1}/${activityInfo.length}`);
@@ -2166,10 +2250,44 @@ GROUP BY c.campaign_id;
       const invite_id = activityInfo[i].invite_id;
 
       const netPayableAmount = payable_amount - fee;
+      const exchangeRate = 150; // KES to USD rate
+      const usdAmount = payable_amount / exchangeRate;
 
-      logger.info(`[payLog] Step 5.${i + 1}: Payable amount: ${payable_amount}, Fee: ${fee}, Net payable: ${netPayableAmount}`);
+      logger.info(`[payLog] Step 5.${i + 1}: Payable amount: ${payable_amount}, Fee: ${fee}, Net payable: ${netPayableAmount}, USD equivalent: ${usdAmount}`);
 
       const refId = this.getRandomString();
+      let stellarTxHash = null;
+      let paymentMethod = 'OFF_CHAIN';
+
+      // Try Stellar payment first if user has wallet
+      try {
+        const userStellarWallet = await this.userStellarService.getUserStellarWallet(userId);
+        
+        if (userStellarWallet && escrowSecret) {
+          logger.info(`[payLog] Step 5.${i + 1}: User ${userId} has Stellar wallet. Attempting blockchain payment.`);
+          
+          const escrowBalance = await this.userStellarService.getUserStellarBalance('admin');
+          if (parseFloat(escrowBalance) >= usdAmount) {
+            const transferResult = await this.userStellarService.transferFromUserWallet(
+              'admin',
+              userStellarWallet.stellar_public_key,
+              usdAmount.toString(),
+              `Campaign payment for ${closed[0].title}`
+            );
+            
+            if (transferResult.success) {
+              stellarTxHash = transferResult.transactionId;
+              paymentMethod = 'STELLAR';
+              logger.info(`[payLog] Step 5.${i + 1}: Stellar payment successful: ${stellarTxHash}`);
+            } else {
+              logger.warn(`[payLog] Step 5.${i + 1}: Stellar payment failed, falling back to off-chain`);
+            }
+          }
+        }
+      } catch (stellarError) {
+        logger.warn(`[payLog] Step 5.${i + 1}: Stellar payment error: ${stellarError}. Falling back to off-chain.`);
+      }
+
       const paymentRecord = {
         campaign_id,
         trans_id: refId,
@@ -2177,7 +2295,9 @@ GROUP BY c.campaign_id;
         amount_payable: payable_amount,
         amount_paid: netPayableAmount,
         trans_status: 'PENDING',
-        fee: fee
+        fee: fee,
+        payment_method: paymentMethod,
+        stellar_tx_hash: stellarTxHash
       };
 
       await this.insertData("campaign_payments_users", paymentRecord);
@@ -2186,26 +2306,40 @@ GROUP BY c.campaign_id;
       const wallet = await this.GenerateCurrencyWallet(userId, "USD");
       const wallet_id = wallet.wallet_id;
 
-      let escrowWallet: any = process.env.ESCROW_WALLET;
-      let feeWalletId: any = process.env.FEE_WALLET;
+      let escrowWallet: any = (process.env.ESCROW_WALLET && process.env.ESCROW_WALLET !== 'undefined') ? process.env.ESCROW_WALLET : "ESCROW000000";
+      let feeWalletId: any = (process.env.FEE_WALLET && process.env.FEE_WALLET !== 'undefined') ? process.env.FEE_WALLET : "FEE000000";
       const trans_id = `t${this.getRandomString()}`
-      const transferObj = await this.walletTransfer(trans_id, userId, wallet_id, "TRANSFER", netPayableAmount, fee, "USD", "CAMPAIGN PAYMENT", escrowWallet, campaign_id);
-      const transferObjfee = await this.walletTransfer(trans_id, "admin", feeWalletId, "FEE", fee, 0, "USD", "CAMPAIGN FEES", escrowWallet, campaign_id);
+      
+      // Only do off-chain transfer if Stellar payment failed or wasn't attempted
+      if (paymentMethod === 'OFF_CHAIN') {
+        const transferObj = await this.walletTransfer(trans_id, userId, wallet_id, "TRANSFER", netPayableAmount, fee, "USD", "CAMPAIGN PAYMENT", escrowWallet, campaign_id);
+        const transferObjfee = await this.walletTransfer(trans_id, "admin", feeWalletId, "FEE", fee, 0, "USD", "CAMPAIGN FEES", escrowWallet, campaign_id);
 
-      logger.info(`TRANSACTION_OBJS`, transferObj.data.trans_id)
+        logger.info(`TRANSACTION_OBJS`, transferObj.data.trans_id)
 
-      if (transferObj.status == 200) {
+        if (transferObj.status == 200) {
+          const updateInfo = {
+            pay_status: "paid",
+            pay_transId: transferObj.data.trans_id
+          };
+          totalPaid += payable_amount;
+          await this.updateData("act_campaign_invites", `invite_id='${invite_id}'`, updateInfo);
+          await this.updateData("campaign_payments_users", `trans_id='${refId}'`, { trans_status: "SUCCESS" });
+          logger.info(`[payLog] Step 5.${i + 1}: Payment successful for user: ${userId}`);
+        } else {
+          await this.updateData("campaign_payments_users", `trans_id='${refId}'`, { trans_status: "FAILED", rsp_data: JSON.stringify(transferObj) });
+          logger.info(`[payLog] Step 5.${i + 1}: Payment failed for user: ${userId}`);
+        }
+      } else {
+        // Stellar payment was successful
         const updateInfo = {
           pay_status: "paid",
-          pay_transId: transferObj.data.trans_id
+          pay_transId: stellarTxHash
         };
         totalPaid += payable_amount;
         await this.updateData("act_campaign_invites", `invite_id='${invite_id}'`, updateInfo);
-        await this.updateData("campaign_payments_users", `trans_id='${refId}'`, { trans_status: "SUCCESS" });
-        logger.info(`[payLog] Step 5.${i + 1}: Payment successful for user: ${userId}`);
-      } else {
-        await this.updateData("campaign_payments_users", `trans_id='${refId}'`, { trans_status: "FAILED", rsp_data: JSON.stringify(transferObj) });
-        logger.info(`[payLog] Step 5.${i + 1}: Payment failed for user: ${userId}`);
+        await this.updateData("campaign_payments_users", `trans_id='${refId}'`, { trans_status: "SUCCESS", stellar_tx_hash: stellarTxHash });
+        logger.info(`[payLog] Step 5.${i + 1}: Stellar payment successful for user: ${userId}`);
       }
     }
 
@@ -2216,7 +2350,7 @@ GROUP BY c.campaign_id;
     await this.updateData("act_campaigns", `campaign_id='${campaign_id}'`, { status: 'completed', completed_on: current_date, amount_spent: totalPaid });
 
     const balance = budget - totalPaid;
-    const escrow = process.env.ESCROW_WALLET || "";
+    const escrow = (process.env.ESCROW_WALLET && process.env.ESCROW_WALLET !== 'undefined') ? process.env.ESCROW_WALLET : "ESCROW000000";
     const creatorWallet = await this.GenerateCurrencyWallet(closed[0].created_by_user_id, "USD");
     const creatorWalletId = creatorWallet.wallet_id;
     const trans_id = `t${this.getRandomString()}`
@@ -2232,6 +2366,369 @@ GROUP BY c.campaign_id;
 
     logger.info(`[payLog] Step 7: Campaign processing completed: ${campaign_id}`);
     return this.makeResponse(200, "Campaign processing completed successfully");
+  }
+
+  // ─── Pay single influencer from Job Board job ─────────────────────────────────
+  
+  async payInfluencer(data: any) {
+    const { campaign_id, userId, amount, displayCurrency = 'KES' } = data;
+    
+    // Use USD for blockchain payments (Stellar only supports XLM/SBX which map to USD)
+    const currency = 'USD';
+    
+    // Convert KES to USD (approximate rate: 150 KES = 1 USD)
+    const exchangeRate = 150;
+    const usdAmount = displayCurrency === 'KES' ? amount / exchangeRate : amount;
+    
+    if (!campaign_id || !userId || !amount) {
+      return this.makeResponse(400, "campaign_id, userId, and amount are required");
+    }
+    
+    logger.info(`[JobBoardPayment] Starting payment: ${amount} ${displayCurrency} (${usdAmount} USD) to user ${userId} for campaign ${campaign_id}`);
+    
+    // Get campaign info
+    const campaign: any[] = await this.callQuerySafe(
+      `SELECT campaign_id, title, created_by, budget, status FROM act_campaigns WHERE campaign_id = ? LIMIT 1`,
+      [campaign_id]
+    );
+    
+    if (campaign.length === 0) {
+      return this.makeResponse(404, "Campaign not found");
+    }
+    
+    if (campaign[0].status !== 'active' && campaign[0].status !== 'open_to_applications') {
+      return this.makeResponse(400, "Campaign is not active");
+    }
+    
+    // Get the brand's wallet
+    const brandWallet = await this.GenerateCurrencyWallet(campaign[0].created_by, currency);
+    
+    if (!brandWallet) {
+      return this.makeResponse(500, "Could not find brand wallet");
+    }
+    
+    const brandWalletId = brandWallet.wallet_id;
+    
+    // Get or create influencer's wallet
+    const influencerWallet = await this.GenerateCurrencyWallet(userId, currency);
+    
+    if (!influencerWallet) {
+      return this.makeResponse(500, "Could not find influencer wallet");
+    }
+    
+    const influencerWalletId = influencerWallet.wallet_id;
+    
+    // Calculate fee (e.g., 10% platform fee) on USD amount
+    const feePercentage = 10; // Can be made configurable
+    const fee = (usdAmount * feePercentage) / 100;
+    const netAmount = usdAmount - fee;
+    
+    logger.info(`[JobBoardPayment] Fee: ${fee} USD, Net: ${netAmount} USD (from ${amount} ${displayCurrency})`);
+    
+    // Get escrow wallet secret for making payments
+    const escrowSecret = process.env.ESCROW_SECRET_KEY;
+
+    let stellarTxHash = null;
+    let paymentMethod = 'OFF_CHAIN'; // Default to off-chain
+    const refId = this.getRandomString(); // Generate reference ID for payment record
+
+    try {
+      // Check if user has a Stellar wallet
+      const userStellarWallet = await this.userStellarService.getUserStellarWallet(userId);
+
+      const escrowAccount = process.env.ESCROW_ACCOUNT || '';
+      const tokenIssuer = process.env.BET_TOKEN_ISSUER || '';
+
+      if (userStellarWallet && escrowSecret && escrowAccount && tokenIssuer) {
+        // User has Stellar wallet - attempt blockchain payment
+        logger.info(`[JobBoardPayment] User ${userId} has Stellar wallet. Attempting blockchain payment.`);
+
+        // Get escrow SBX balance directly from Stellar
+        const escrowBalance = await this.stellar.getBalance(
+          escrowAccount,
+          'SBX',
+          tokenIssuer
+        );
+        logger.info(`[JobBoardPayment] Escrow SBX balance: ${escrowBalance}`);
+        
+        if (parseFloat(escrowBalance) >= usdAmount) {
+          // Perform Stellar transfer from escrow
+          const transferResult = await this.stellar.makePayment({
+            senderKeyPair: StellarSdk.Keypair.fromSecret(escrowSecret),
+            recipientPublicKey: userStellarWallet.stellar_public_key,
+            assetCode: 'SBX',
+            assetIssuer: tokenIssuer,
+            amount: usdAmount.toString(),
+            memo: `Job payment for campaign ${campaign[0].title}`
+          });
+
+          if (transferResult && transferResult !== 'failed') {
+            stellarTxHash = transferResult;
+            paymentMethod = 'STELLAR';
+            logger.info(`[JobBoardPayment] Stellar payment successful: ${stellarTxHash}`);
+          } else {
+            logger.warn(`[JobBoardPayment] Stellar payment failed: ${transferResult}`);
+            // Fall back to off-chain payment
+          }
+        } else {
+          logger.warn(`[JobBoardPayment] Insufficient escrow balance for Stellar payment. Balance: ${escrowBalance}, Required: ${usdAmount}`);
+        }
+      } else {
+        logger.info(`[JobBoardPayment] User ${userId} does not have Stellar wallet or escrow not configured. Using off-chain payment.`);
+      }
+      
+      // Create payment record in campaign_payments_users
+      await this.insertData("campaign_payments_users", {
+        campaign_id,
+        trans_id: refId,
+        user_id: userId,
+        amount_payable: amount,
+        amount_paid: netAmount,
+        fee: fee,
+        trans_status: 'SUCCESS', // Payment processed successfully
+        currency: displayCurrency, // Record original currency (KES) for display
+        payment_type: 'JOB_BOARD',
+        stellar_tx_hash: stellarTxHash,
+        payment_status: 'COMPLETED', // Payment completed
+        created_on: new Date().toISOString().slice(0, 19).replace('T', ' ')
+      });
+      
+      // Update campaign's amount_spent
+      const currentSpent: any[] = await this.callQuerySafe(
+        `SELECT amount_spent FROM act_campaigns WHERE campaign_id = ? LIMIT 1`,
+        [campaign_id]
+      );
+      const currentSpentAmount = currentSpent.length > 0 ? (parseFloat(currentSpent[0].amount_spent) || 0) : 0;
+      const newSpentAmount = currentSpentAmount + usdAmount;
+      await this.updateData("act_campaigns", `campaign_id = '${campaign_id}'`, {
+        amount_spent: newSpentAmount
+      });
+      logger.info(`[JobBoardPayment] Campaign ${campaign_id} spent updated: ${newSpentAmount}`);
+      
+      // Update brand wallet balance (debit) and create transaction
+      let newBrandBalance = 0;
+      let brandBalanceUpdated = false;
+      try {
+        const brandWalletQuery: any[] = await this.callQuerySafe(
+          `SELECT balance FROM user_wallets WHERE wallet_id = ? LIMIT 1`,
+          [brandWalletId]
+        );
+        if (brandWalletQuery.length > 0) {
+          const currentBrandBalance = parseFloat(brandWalletQuery[0].balance) || 0;
+          
+          // Check if brand has sufficient balance
+          if (currentBrandBalance < usdAmount) {
+            logger.error(`[JobBoardPayment] Brand has insufficient balance. Required: ${usdAmount}, Available: ${currentBrandBalance}`);
+            return this.makeResponse(400, "Brand has insufficient wallet balance for this payment");
+          }
+          
+          newBrandBalance = currentBrandBalance - usdAmount;
+          await this.updateData("user_wallets", `wallet_id = '${brandWalletId}'`, {
+            balance: newBrandBalance
+          });
+          brandBalanceUpdated = true;
+          logger.info(`[JobBoardPayment] Brand wallet balance updated: ${currentBrandBalance} -> ${newBrandBalance}`);
+          
+          // Create wallet transaction for the brand (debit)
+          const brandTransId = 'JB_' + this.getRandomString();
+          await this.insertData("wl_transactions", {
+            trans_id: brandTransId,
+            user_id: campaign[0].created_by,
+            dr_wallet_id: brandWalletId,
+            cr_wallet_id: 'OFFCHAIN000',
+            asset: currency,
+            currency: currency,
+            amount: usdAmount,
+            trans_type: "DR",
+            narration: `Job: ${campaign[0].title}`.substring(0, 40),
+            status: 'SUCCESS',
+            running_balance: newBrandBalance,
+            system_status: 'SUCCESS'
+          });
+          logger.info(`[JobBoardPayment] Brand wallet transaction created: ${brandTransId}`);
+        } else {
+          logger.error("[JobBoardPayment] Brand wallet not found:", brandWalletId);
+        }
+      } catch (balanceError) {
+        logger.error("[JobBoardPayment] Error updating brand balance or creating transaction:", balanceError);
+      }
+      
+      // If brand balance wasn't updated, we cannot proceed with the payment
+      if (!brandBalanceUpdated) {
+        return this.makeResponse(500, "Failed to update brand wallet balance");
+      }
+      
+      // Update influencer wallet balance (credit)
+      // Use the influencerWallet that was already created/retrieved earlier
+      try {
+        if (influencerWallet) {
+          const currentInfBalance = parseFloat(influencerWallet.balance) || 0;
+          const newInfBalance = currentInfBalance + netAmount;
+          await this.updateData("user_wallets", `wallet_id = '${influencerWalletId}'`, {
+            balance: newInfBalance
+          });
+          logger.info(`[JobBoardPayment] Influencer wallet balance updated: ${currentInfBalance} -> ${newInfBalance}`);
+          
+          // Create wallet transaction for influencer (credit)
+          const infTransId = 'JB_CR_' + this.getRandomString();
+          await this.insertData("wl_transactions", {
+            trans_id: infTransId,
+            user_id: userId,
+            dr_wallet_id: 'OFFCHAIN000',
+            cr_wallet_id: influencerWalletId,
+            asset: currency,
+            currency: currency,
+            amount: netAmount,
+            trans_type: "CR",
+            narration: `Job: ${campaign[0].title}`.substring(0, 40),
+            status: 'SUCCESS',
+            running_balance: newInfBalance,
+            system_status: 'SUCCESS'
+          });
+          logger.info(`[JobBoardPayment] Influencer wallet transaction created: ${infTransId}`);
+        } else {
+          logger.warn("[JobBoardPayment] Could not find or create influencer wallet - payment will not be reflected in internal balance");
+        }
+      } catch (infBalanceError) {
+        logger.error("[JobBoardPayment] Error updating influencer balance:", infBalanceError);
+      }
+      
+      // Update or create payment config with status
+      const paymentConfigModel = new (await import('./paymentConfig.model')).default();
+      await paymentConfigModel.updatePaymentStatus(
+        campaign_id, 
+        stellarTxHash ? 'AVAILABLE' : 'PENDING',
+        stellarTxHash || undefined
+      );
+      
+      logger.info(`[JobBoardPayment] Payment record created: ${refId}, Stellar: ${stellarTxHash || 'N/A'}`);
+      
+      // Send payment notification to influencer
+            try {
+              this.sendAppNotification(
+                userId,
+                'PAYMENT_RECEIVED',
+                campaign[0].title,  // task/campaign name
+                netAmount.toString(),  // amount
+                "", "", "WALLET", campaign[0].created_by
+              );
+              logger.info(`[JobBoardPayment] Payment notification sent to ${userId}`);
+            } catch (notifError) {
+              logger.error("[JobBoardPayment] Error sending payment notification:", notifError);
+            }      
+      return this.makeResponse(200, "Payment processed successfully", {
+        transaction_id: refId,
+        amount_paid: netAmount,
+        fee: fee,
+        stellar_tx_hash: stellarTxHash
+      });
+      
+    } catch (error) {
+      logger.error("[JobBoardPayment] Error processing payment:", error);
+      return this.makeResponse(500, "Error processing payment: " + error);
+    }
+  }
+
+  // Direct payment from brand wallet to influencer wallet (for standalone job board jobs without campaign)
+  async payInfluencerDirect(data: any) {
+    const { brandId, userId, amount, jobTitle, interestId, displayCurrency = 'KES' } = data;
+    
+    const currency = 'USD';
+    const exchangeRate = 150;
+    const usdAmount = displayCurrency === 'KES' ? amount / exchangeRate : amount;
+    
+    logger.info(`[DirectPayment] Starting direct payment: ${amount} ${displayCurrency} (${usdAmount} USD) from brand ${brandId} to user ${userId} for job: ${jobTitle}`);
+    
+    try {
+      // Get brand's USD wallet
+      const brandWallet = await this.GenerateCurrencyWallet(brandId, currency);
+      if (!brandWallet) {
+        logger.error("[DirectPayment] Brand wallet not found");
+        return this.makeResponse(404, "Brand wallet not found");
+      }
+      
+      // Get influencer's USD wallet
+      const influencerWallet = await this.GenerateCurrencyWallet(userId, currency);
+      if (!influencerWallet) {
+        logger.error("[DirectPayment] Influencer wallet not found");
+        return this.makeResponse(404, "Influencer wallet not found");
+      }
+      
+      // Check brand has sufficient balance
+      const brandBalance = parseFloat(brandWallet.balance) || 0;
+      if (brandBalance < usdAmount) {
+        logger.error(`[DirectPayment] Brand has insufficient balance. Required: ${usdAmount}, Available: ${brandBalance}`);
+        return this.makeResponse(400, "Brand has insufficient wallet balance");
+      }
+      
+      // Calculate fee (10%)
+      const feePercentage = 10;
+      const fee = (usdAmount * feePercentage) / 100;
+      const netAmount = usdAmount - fee;
+      
+      // Update brand wallet (debit)
+      const newBrandBalance = brandBalance - usdAmount;
+      await this.updateData("user_wallets", `wallet_id = '${brandWallet.wallet_id}'`, {
+        balance: newBrandBalance
+      });
+      
+      // Create brand transaction (debit)
+      const brandTransId = 'JB_DIR_DR_' + this.getRandomString();
+      const narration = `Job: ${jobTitle}`.substring(0, 40);
+      await this.insertData("wl_transactions", {
+        trans_id: brandTransId,
+        user_id: brandId,
+        dr_wallet_id: brandWallet.wallet_id,
+        cr_wallet_id: influencerWallet.wallet_id,
+        asset: currency,
+        currency: currency,
+        amount: usdAmount,
+        trans_type: "DR",
+        op_type: 'JOB_PAYMENT',
+        ref_id: interestId || null,
+        narration,
+        status: 'SUCCESS',
+        running_balance: newBrandBalance,
+        system_status: 'SUCCESS'
+      });
+      
+      // Update influencer wallet (credit)
+      const infBalance = parseFloat(influencerWallet.balance) || 0;
+      const newInfBalance = infBalance + netAmount;
+      await this.updateData("user_wallets", `wallet_id = '${influencerWallet.wallet_id}'`, {
+        balance: newInfBalance
+      });
+      
+      // Create influencer transaction (credit)
+      const infTransId = 'JB_DIR_CR_' + this.getRandomString();
+      await this.insertData("wl_transactions", {
+        trans_id: infTransId,
+        user_id: userId,
+        dr_wallet_id: brandWallet.wallet_id,
+        cr_wallet_id: influencerWallet.wallet_id,
+        asset: currency,
+        currency: currency,
+        amount: netAmount,
+        trans_type: "CR",
+        op_type: 'JOB_PAYMENT',
+        ref_id: interestId || null,
+        narration,
+        status: 'SUCCESS',
+        running_balance: newInfBalance,
+        system_status: 'SUCCESS'
+      });
+      
+      logger.info(`[DirectPayment] Direct payment completed: ${netAmount} USD to ${userId}`);
+      
+      return this.makeResponse(200, "Payment processed successfully", {
+        amount_paid: netAmount,
+        fee: fee
+      });
+      
+    } catch (error) {
+      logger.error("[DirectPayment] Error processing direct payment:", error);
+      return this.makeResponse(500, "Error processing payment: " + error);
+    }
   }
 
   async userAlreadyInvited(userId: string, campaignId: string) {
@@ -2368,38 +2865,6 @@ GROUP BY c.campaign_id;
     } catch (error) {
       console.error("Error in validateTaskPeriod:", error);
       return this.makeResponse(500, "Error validating task period");
-    }
-  }
-
-  async sendReminder(data: any) {
-    try {
-      const { user_id, campaign_id, reminder_type, invite_id } = data;
-
-      if (!user_id || !campaign_id || !reminder_type) {
-        return this.makeResponse(400, "user_id, campaign_id, and reminder_type are required");
-      }
-
-      // Get user and campaign details
-      const user: any = await this.getUsersProfile(user_id);
-      const campaign: any = await this.selectDataQuery("act_campaigns", `campaign_id = '${campaign_id}'`);
-
-      if (!user || !campaign || campaign.length === 0) {
-        return this.makeResponse(404, "User or campaign not found");
-      }
-
-      const campaignData = campaign[0];
-      const userName = user.first_name || user.username;
-      const userEmail = await this.getUsersEmail(user_id);
-
-      // Send email based on reminder type
-      await this.sendEmail(reminder_type, userEmail, userName, campaignData.title);
-
-      logger.info(`Reminder sent to ${userEmail} for campaign ${campaign_id}, type: ${reminder_type}`);
-
-      return this.makeResponse(200, "Reminder sent successfully");
-    } catch (error) {
-      logger.error("Error in sendReminder:", error);
-      return this.makeResponse(500, "Error sending reminder");
     }
   }
 }

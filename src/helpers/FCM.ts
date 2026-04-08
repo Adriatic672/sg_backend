@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { google } from 'googleapis'; // To handle OAuth2 authentication
+import fs from 'fs';
 
 // Firebase project configuration
 const FCM_ENDPOINT: string = process.env.FCM_ENDPOINT || "https://fcm.googleapis.com/v1/projects/app-social-gems/messages:send";
@@ -19,11 +20,16 @@ const getAccessToken = async () =>{
   });
 
   return accessToken;
-}
+};
 
 // Function to send a notification to a topic or a device
 const sendNotification = async (recipient: string, data: any, isTopic: boolean = false): Promise<boolean> => {
   console.log(`sendNotification`,recipient,data)
+
+  if (process.env.ENVIRONMENT !== 'production' && !fs.existsSync(GOOGLE_CREDENTIALS_PATH)) {
+    console.log(`[MockFCM] Notification to ${recipient}: ${data.title || 'No Title'}`);
+    return true;
+  }
   
   // Convert all data values to strings as FCM requires string key-value pairs
   const fcmData: { [key: string]: string } = {};
@@ -65,6 +71,11 @@ const sendNotification = async (recipient: string, data: any, isTopic: boolean =
 
  
 const subscribeToTopic = async (token: string, topic: string): Promise<boolean> => {
+  if (process.env.ENVIRONMENT !== 'production' && !fs.existsSync(GOOGLE_CREDENTIALS_PATH)) {
+    console.log(`[MockFCM] Subscribed ${token} to topic ${topic}`);
+    return true;
+  }
+
   const url = `https://iid.googleapis.com/iid/v1/${token}/rel/topics/${topic}`;
   const accessToken = await getAccessToken();
 

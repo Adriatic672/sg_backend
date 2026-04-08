@@ -48,7 +48,7 @@ export default class FacebookAPI {
    * Fetch a Facebook post by ID.
    * @param postId The ID of the Facebook post
    */
-  public async getPost(postId: string): Promise<any> {
+  public async getPost(postId: string): Promise<any | null> {
     try {
       const response = await this.get('/post', { post_id: postId });
       console.log('getPost-x (Facebook)', response.data);
@@ -110,7 +110,7 @@ export default class FacebookAPI {
     return url;
   }
 
-  async extractFacebookPostId(url: string) {
+  async extractFacebookPostId(url: string): Promise<string | null> {
     try {
       const urlObj = new URL(url);
   

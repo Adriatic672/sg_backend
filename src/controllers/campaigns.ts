@@ -35,11 +35,11 @@ router.get('/getActionedInfluencers/:id', applyJWTConditionally, getActionedInfl
 router.post('/closeCampaignManually', applyJWTConditionally, closeCampaignManually);
 router.post('/payInfluencers', applyJWTConditionally, payInfluencers);
 router.post('/payout', applyJWTConditionally, payout);
-router.post('/sendReminder', applyJWTConditionally, sendReminder);
 
 
 
 // Influencer actions
+router.get('/explore', applyJWTConditionally, exploreCampaigns);
 router.get('/userCampaigns', applyJWTConditionally, getMyCampaigns);
 router.get('/campaign/:id', applyJWTConditionally, getCampaignById);
 router.get('/getCampaignTasks/:id', applyJWTConditionally, getCampaignTasks);
@@ -434,6 +434,16 @@ async function receivedInvites(req: Request, res: Response) {
   }
 }
 
+async function exploreCampaigns(req: Request, res: Response) {
+  try {
+    const result = await campaign.exploreCampaigns(req.body.userId);
+    res.status(200).json(result);
+  } catch (error) {
+    console.error("Error in exploreCampaigns:", error);
+    res.status(500).json({ message: 'Error retrieving campaigns', error });
+  }
+}
+
 async function getMyCampaigns(req: Request, res: Response) {
   try {
     const result = await campaign.getMyCampaigns(req.body.userId);
@@ -473,16 +483,6 @@ async function handleCampaignInvite(req: Request, res: Response) {
   } catch (error) {
     console.error("Error in handleCampaignInvite:", error);
     res.status(500).json({ message: 'Error handling campaign invite', error });
-  }
-}
-
-async function sendReminder(req: Request, res: Response) {
-  try {
-    const result = await campaign.sendReminder(req.body);
-    res.status(result.status).json(result);
-  } catch (error) {
-    console.error("Error in sendReminder:", error);
-    res.status(500).json({ message: 'Error sending reminder', error });
   }
 }
 

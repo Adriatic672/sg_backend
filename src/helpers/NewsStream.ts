@@ -20,7 +20,11 @@ class NewsStream {
 
     async getNews(country: string, category: string) {
         if (!this.apiKey) {
-            throw new Error("News API key is missing. Please set NEWS_API in environment variables.");
+            if (process.env.ENVIRONMENT === 'production') {
+                throw new Error("News API key is missing. Please set NEWS_API in environment variables.");
+            }
+            console.warn("[MockNews] Returning empty news list (No API Key)");
+            return this.makeResponse(200, "Success (Mock)", []);
         }
 
         const cacheKey = `${country}-${category}`;

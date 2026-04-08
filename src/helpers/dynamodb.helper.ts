@@ -1,13 +1,33 @@
-import AWS from 'aws-sdk';
-import { CreateTableInput, AttributeValue, PutItemInput, UpdateItemInput } from 'aws-sdk/clients/dynamodb';
+// Determine if we should use real DynamoDB or local in-memory mock
+const isProduction = process.env.ENVIRONMENT === 'production';
+const hasCredentials = !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY);
+const useRealDynamo = isProduction && hasCredentials;
 
-AWS.config.update({ region: process.env.DYNAMO_AWS_REGION });
-const dynamoDb = new AWS.DynamoDB.DocumentClient();
-const dynamoDbRaw = new AWS.DynamoDB();
+// Conditionally import AWS SDK only when needed in production
+let AWS: any = null;
+let dynamoDb: any = null;
+let dynamoDbRaw: any = null;
+
+if (useRealDynamo) {
+    // Dynamic import only in production with credentials
+    AWS = require('aws-sdk');
+    AWS.config.update({ region: process.env.DYNAMO_AWS_REGION || 'us-east-1' });
+    dynamoDb = new AWS.DynamoDB.DocumentClient();
+    dynamoDbRaw = new AWS.DynamoDB();
+}
+
+// In-memory mock storage for development (TableName -> Array of Items)
+const mockStorage: Record<string, any[]> = {};
 
 async function createTableIfNotExists(tableName: string, keyAttribute: string): Promise<void> {
     const fullTableName = getDbName(tableName);
-    const params: CreateTableInput = {
+    
+    if (!useRealDynamo || !dynamoDbRaw) {
+        console.log(`[DynamoMock] Table "${fullTableName}" assumed to exist (Mock Mode)`);
+        return;
+    }
+
+    const params: any = {
         TableName: fullTableName,
         KeySchema: [
             { AttributeName: keyAttribute, KeyType: 'HASH' }  // Primary key (HASH)
@@ -38,7 +58,22 @@ export async function createItem<T>(tableName: string, keyAttribute: string, ite
     await createTableIfNotExists(tableName, keyAttribute);
     const fullTableName = getDbName(tableName);
 
-    const params: PutItemInput = {
+    if (!useRealDynamo || !dynamoDb) {
+        if (!mockStorage[fullTableName]) {
+            mockStorage[fullTableName] = [];
+        }
+        // Simulate overwrite if key exists
+        const existingIndex = mockStorage[fullTableName].findIndex(i => i[keyAttribute] === item[keyAttribute]);
+        if (existingIndex >= 0) {
+            mockStorage[fullTableName][existingIndex] = item;
+        } else {
+            mockStorage[fullTableName].push(item);
+        }
+        console.log(`[DynamoMock] Item created in ${fullTableName}:`, item[keyAttribute]);
+        return;
+    }
+
+    const params: any = {
         TableName: fullTableName,
         Item: {
             ...item
@@ -56,6 +91,11 @@ export async function createItem<T>(tableName: string, keyAttribute: string, ite
 export async function getAllItems<T>(tableName: string): Promise<T[]> {
 
     const fullTableName = getDbName(tableName);
+
+    if (!useRealDynamo || !dynamoDb) {
+        return (mockStorage[fullTableName] || []) as T[];
+    }
+
     const params = {
         TableName: fullTableName
     };
@@ -71,6 +111,21 @@ export async function getAllItems<T>(tableName: string): Promise<T[]> {
 
 export async function getItemByFields<T>(tableName: string, filters: { [key: string]: any }): Promise<T[] | null> {
     const fullTableName = getDbName(tableName);
+
+    if (!useRealDynamo || !dynamoDb) {
+        const items = mockStorage[fullTableName] || [];
+        const result = items.filter(item => {
+            return Object.keys(filters).every(key => {
+                const condition = filters[key];
+                if (typeof condition === 'object' && condition.$gt) {
+                    return item[key] > condition.$gt;
+                }
+                return item[key] === condition;
+            });
+        });
+        return result.length > 0 ? result as T[] : null;
+    }
+
     const filterExpressions: string[] = [];
     const expressionAttributeNames: { [key: string]: string } = {};
     const expressionAttributeValues: { [key: string]: any } = {};
@@ -117,7 +172,13 @@ export async function queryItems<T>(
     sortKeyCondition?: { key: string; operator: string; value: any }
   ): Promise<T[]> {
     const fullTableName = getDbName(tableName);
-    const params: AWS.DynamoDB.DocumentClient.QueryInput = {
+
+    if (!useRealDynamo || !dynamoDb) {
+        const items = mockStorage[fullTableName] || [];
+        return items.filter(item => item[partitionKey] === partitionValue) as T[];
+    }
+
+    const params: any = {
       TableName: fullTableName,
       KeyConditionExpression: `#pk = :pk`,
       ExpressionAttributeNames: {
@@ -147,6 +208,12 @@ export async function queryItems<T>(
 
 export async function getItemById<T>(tableName: string, keyAttribute: string, id: string): Promise<T | null> {
     const fullTableName = getDbName(tableName);
+
+    if (!useRealDynamo || !dynamoDb) {
+        const items = mockStorage[fullTableName] || [];
+        return (items.find(item => item[keyAttribute] === id) || null) as T | null;
+    }
+
     const params = {
         TableName: fullTableName,
         Key: {
@@ -170,6 +237,25 @@ export async function updateItem(
   updates: Partial<Record<string, any>>
 ): Promise<void> {
   const fullTableName = getDbName(tableName);
+
+  if (!useRealDynamo || !dynamoDb) {
+      if (!mockStorage[fullTableName]) return;
+      
+      const itemIndex = mockStorage[fullTableName].findIndex(item => {
+          if (typeof keyAttribute === 'string' && typeof id === 'string') {
+              return item[keyAttribute] === id;
+          }
+          // Handle composite key logic if necessary, simplified here for string ID
+          return false; 
+      });
+
+      if (itemIndex >= 0) {
+          mockStorage[fullTableName][itemIndex] = { ...mockStorage[fullTableName][itemIndex], ...updates };
+          console.log(`[DynamoMock] Item updated in ${fullTableName}`);
+      }
+      return;
+  }
+
   try {
     // Build the key object dynamically and track key attribute names
     const key: Record<string, any> = {};
@@ -213,7 +299,7 @@ export async function updateItem(
       {}
     );
 
-    const params: UpdateItemInput = {
+    const params: any = {
       TableName: fullTableName,
       Key: key,
       UpdateExpression: updateExpression,
@@ -236,6 +322,11 @@ export async function selectData(
     filterConditions: Array<{ [key: string]: any }>
   ) {
     const fullTableName = getDbName(tableName);
+
+    if (!useRealDynamo || !dynamoDb) {
+        return await getItemByFields(tableName, Object.assign({}, ...filterConditions)) || [];
+    }
+
     if (!filterConditions || filterConditions.length === 0) {
       throw new Error("No filter conditions provided.");
     }
@@ -275,6 +366,14 @@ export async function selectData(
 
 export async function deleteItem(tableName: string, keyAttribute: string, id: string): Promise<void> {
     const fullTableName = getDbName(tableName);
+
+    if (!useRealDynamo || !dynamoDb) {
+        if (!mockStorage[fullTableName]) return;
+        mockStorage[fullTableName] = mockStorage[fullTableName].filter(item => item[keyAttribute] !== id);
+        console.log(`[DynamoMock] Item deleted from ${fullTableName}`);
+        return;
+    }
+
     const params = {
         TableName: fullTableName,
         Key: {

@@ -127,7 +127,18 @@ class Admin extends Model {
       return this.makeResponse(500, "Error approving business registration");
     }
   }
-  newsCategories() {
+  async newsCategories() {
+    // Fetch from database table if available, otherwise use default categories
+    try {
+      const categories = await this.selectDataQuery(`news_categories`);
+      if (categories && categories.length > 0) {
+        const categoryNames = categories.map((c: any) => c.name);
+        return this.makeResponse(200, "Categories retrieved successfully", categoryNames);
+      }
+    } catch (error) {
+      // Table might not exist, return default categories
+    }
+    // Default news categories
     const obj = ['business', 'entertainment', 'general', 'health', 'science', 'sports', 'technology'];
     return this.makeResponse(200, "Categories retrieved successfully", obj);
   }
@@ -979,18 +990,54 @@ COALESCE(p.username, 'admin') AS username,
     const totalCampaigns: any = await this.callQuerySafe(`SELECT COUNT(*) AS users FROM act_campaigns where status !='draft'`);
     const completedCampaigns: any = await this.callQuerySafe(`SELECT COUNT(*) AS users FROM act_campaigns WHERE status='completed'`);
 
+    // Onboarding: influencers with at least one social account connected
+    const onboardedUsers: any = await this.callQuerySafe(`
+      SELECT COUNT(DISTINCT u.user_id) AS onboarded
+      FROM users u
+      INNER JOIN sm_site_users s ON u.user_id = s.user_id
+      WHERE u.user_type = 'influencer'
+    `);
+
+    const totalInfluencers = totalUsers[0].users;
+    const onboarded = onboardedUsers[0].onboarded;
+    const onboardingRate = totalInfluencers > 0
+      ? Math.round((onboarded / totalInfluencers) * 100)
+      : 0;
+
     return {
-      totalInfluencers: totalUsers[0].users,
+      totalInfluencers,
       brandUsers: brandUsers[0].users,
       activeCampaigns: activeCampaigns[0].users,
       totalTasks: totalTasks[0].users,
       totalCampaigns: totalCampaigns[0].users,
       closedCampaigns: completedCampaigns[0].users,
-      completedCampaigns: completedCampaigns[0].users
+      completedCampaigns: completedCampaigns[0].users,
+      onboardedInfluencers: onboarded,
+      onboardingRate,
     };
-
-
   }
+
+  async getApplicationsPerCampaign() {
+    return await this.callQuerySafe(`
+      SELECT
+        c.campaign_id,
+        c.title,
+        c.status,
+        c.created_on,
+        p.name AS brand_name,
+        COUNT(cpu.id) AS total_applications,
+        SUM(CASE WHEN cpu.trans_status = 'SUCCESS' THEN 1 ELSE 0 END) AS approved,
+        SUM(CASE WHEN cpu.trans_status = 'PENDING' THEN 1 ELSE 0 END) AS pending
+      FROM act_campaigns c
+      LEFT JOIN business_profile p ON c.created_by = p.business_id
+      LEFT JOIN campaign_payments_users cpu ON c.campaign_id = cpu.campaign_id
+      WHERE c.status != 'draft'
+      GROUP BY c.campaign_id, c.title, c.status, c.created_on, p.name
+      ORDER BY total_applications DESC
+      LIMIT 50
+    `);
+  }
+
   async adminWallets() {
     return await this.callQuerySafe(`SELECT * FROM user_wallets where user_id ='admin'`);
   }

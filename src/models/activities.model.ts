@@ -30,14 +30,50 @@ class Activities extends Model {
   }
 
   async getNewsCategories() {
-    const tags = ["business", "entertainment", "general", "health", "science", "sports", "technology"]
-    return this.makeResponse(200, JSON.stringify(tags))
+    // Fetch from database table if available, otherwise use default categories
+    try {
+      const categories = await this.selectDataQuery(`news_categories`);
+      if (categories && categories.length > 0) {
+        const categoryNames = categories.map((c: any) => c.name);
+        return this.makeResponse(200, JSON.stringify(categoryNames));
+      }
+    } catch (error) {
+      // Table might not exist, return default categories
+    }
+    // Default news categories
+    const tags = ["business", "entertainment", "general", "health", "science", "sports", "technology"];
+    return this.makeResponse(200, JSON.stringify(tags));
   }
 
   async cacheNews() {
-    //const supportedCountries = ['us', 'uk', 'ug', 'ke'];
-    const supportedCountries = ['us', 'ug', 'uk'];
-    const categories = ["politics", "sports", "technology"];
+    // Fetch supported countries from database or use defaults
+    let supportedCountries: string[] = [];
+    try {
+      const countries = await this.selectDataQuery(`news_countries`);
+      if (countries && countries.length > 0) {
+        supportedCountries = countries.map((c: any) => c.code);
+      }
+    } catch (error) {
+      // Table might not exist
+    }
+    if (supportedCountries.length === 0) {
+      supportedCountries = ['us', 'ug', 'uk'];
+    }
+
+    // Fetch categories from database or use defaults
+    let categories: string[] = [];
+    try {
+      const cats = await this.selectDataQuery(`news_categories`);
+      if (cats && cats.length > 0) {
+        categories = cats.map((c: any) => c.name);
+      }
+    } catch (error) {
+      // Table might not exist
+    }
+    if (categories.length === 0) {
+      categories = ["politics", "sports", "technology"];
+    }
+
     for (const country of supportedCountries) {
       for (const category of categories) {
         try {
@@ -396,7 +432,6 @@ class Activities extends Model {
 
   async activityComplete(data: any) {
     try {
-      console.log("activityComplete", data)
       const { activity_url, userId, activity_id } = data;
 
 
@@ -412,15 +447,9 @@ class Activities extends Model {
         return this.makeResponse(404, "Task not found");
       }
       const is_repetitive = taskInfo[0].is_repetitive;
-      const requires_url = taskInfo[0].requires_url;
+
       let period_id = null;
       let ext = ""
-
-      if (requires_url == 'yes') {
-        if (!activity_url) {
-         return this.makeResponse(400, "URL is required for this task");
-        }
-      }
 
       if (is_repetitive == 'yes') {
         period_id = data.period_id
@@ -492,6 +521,11 @@ class Activities extends Model {
           return this.makeResponse(400, "Post verification failed. Ensure the post contains the required hashtag.", [], true, logData);
         }
 
+        const info = { "is_verified": 'yes' }
+        await this.updateData(`sm_site_users`, `social_id=${social_id}`, info);
+
+        //check if the user has liked the page
+        //if not, return error
       } else if (operation === 'CONNECT_TIKTOK') {
         const account = await this.userSite(userId, 2); // TikTok = 2
         const xAcc = account.data;
@@ -513,6 +547,9 @@ class Activities extends Model {
           return this.makeResponse(400, "Validation failed, make sure the post contains the required hashtag.", [], true, logData);
         }
 
+        await this.updateData('sm_site_users', `social_id=${social_id}`, { is_verified: 'yes' });
+
+
       } else if (operation === 'CONNECT_FACEBOOK') {
         const account = await this.userSite(userId, 3); // Facebook = 3
         const xAcc = account.data;
@@ -532,6 +569,7 @@ class Activities extends Model {
         if (isVerified !== true) {
           return this.makeResponse(400, "Post verification failed. Ensure the post contains the required hashtag.", [], true, logData);
         }
+        await this.updateData('sm_site_users', `social_id=${social_id}`, { is_verified: 'yes' });
 
       } else if (operation === 'CONNECT_INSTAGRAM') {
         const account = await this.userSite(userId, 4); // Instagram = 4
@@ -558,6 +596,7 @@ class Activities extends Model {
           return this.makeResponse(400, isVerified);
         }
 
+        await this.updateData('sm_site_users', `social_id=${social_id}`, { is_verified: 'yes' });
       }
 
       const update = { activity_url, status: 'complete', period_id };
@@ -639,17 +678,7 @@ class Activities extends Model {
 
   async createTask(data: any) {
     try {
-      const { 
-        title, 
-        description, 
-        end_date, 
-        image_url, 
-        reward, 
-        userId, 
-        requires_url = 'no', 
-        is_repetitive = 'no', 
-        repeats_after = 'daily' 
-      } = data;
+      const { title, description, end_date, image_url, reward, userId, requires_url, is_repetitive, repeats_after } = data;
 
       const currentDate = new Date();
       const providedEndDate = new Date(end_date);
@@ -673,9 +702,7 @@ class Activities extends Model {
       const currentPeriodId = this.defaultPeriod()
       let nextPeriodDate = null;
       const repeats_after_array = ['daily', 'weekly', 'monthly'];
-      
-      // Only validate repeats_after if task is repetitive
-      if (is_repetitive === 'yes' && !repeats_after_array.includes(repeats_after)) {
+      if (!repeats_after_array.includes(repeats_after)) {
         return this.makeResponse(400, "Invalid repeat frequency, should be daily, weekly or monthly");
       }
       if (is_repetitive == 'yes') {

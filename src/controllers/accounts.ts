@@ -1,12 +1,12 @@
 import express, { Request, Response } from 'express';
-import CompanyServices from '../models/accounts.model';
+import Accounts from '../models/accounts.model';
 import { JWTMiddleware } from '../helpers/jwt.middleware';
 import Wallet from '../models/wallet.model';
 import { VERSION_CODE } from '../app';
 
 const pay = new Wallet();
 const router = express.Router();
-const companyServices = new CompanyServices();
+const companyServices = new Accounts();
 
 const applyJWTConditionally = (req: Request, res: Response, next: any) => {
   JWTMiddleware.verifyToken(req, res, next);
@@ -45,6 +45,7 @@ router.post('/changePassword', applyJWTConditionally, changePassword);
 router.post('/refreshJWT', applyJWTConditionally, refreshJWT);
 router.get('/getUserByPhoneNumber/:id', applyJWTConditionally, getUserByPhoneNumber);
 router.get('/getUserById/:id', applyJWTConditionally, getUserById);
+router.get('/brandHiredInfluencers/:brandId', applyJWTConditionally, getBrandHiredInfluencers);
 router.get('/getUserProfile', applyJWTConditionally, logCount, getUserProfile);
 router.patch('/updateProfile', applyJWTConditionally, updateProfile);
 
@@ -53,6 +54,9 @@ router.post('/requestPhoneNumberchange', applyJWTConditionally, requestPhoneNumb
 router.post('/changeUsername', applyJWTConditionally, changeUsername);
 router.get('/countries', countries);
 router.get('/industries', industries);
+router.get('/currencies', currencies);
+router.get('/ranks', ranks);
+router.get('/job-niches', jobNiches);
 router.get('/socialSites', applyJWTConditionally, socialSites);
 router.post('/addSocialSite', applyJWTConditionally, addSocialSite);
 router.patch('/editSocialSite', applyJWTConditionally, editSocialSite);
@@ -339,6 +343,33 @@ async function industries(req: Request, res: Response) {
   }
 }
 
+async function currencies(req: Request, res: Response) {
+  try {
+    const result = await companyServices.currencies();
+    res.status(200).json(result);
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching currencies', error });
+  }
+}
+
+async function ranks(req: Request, res: Response) {
+  try {
+    const result = await companyServices.ranks();
+    res.status(200).json(result);
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching ranks', error });
+  }
+}
+
+async function jobNiches(req: Request, res: Response) {
+  try {
+    const result = await companyServices.jobNiches();
+    res.status(200).json(result);
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching job niches', error });
+  }
+}
+
 
 
 async function getUserById(req: Request, res: Response) {
@@ -501,6 +532,15 @@ async function requestAccountDeletion(req: Request, res: Response) {
     res.status(result.status).json(result);
   } catch (error) {
     res.status(500).json({ status: 500, message: 'Error processing account deletion request' });
+  }
+}
+
+async function getBrandHiredInfluencers(req: Request, res: Response) {
+  try {
+    const result = await companyServices.getBrandHiredInfluencers(req.params.brandId);
+    res.status(200).json(result);
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching brand hired influencers', error });
   }
 }
 

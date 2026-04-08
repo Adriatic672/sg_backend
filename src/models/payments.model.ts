@@ -4,7 +4,18 @@ import { setItem } from "../helpers/connectRedis";
 import Stripe from 'stripe';
 import { logger } from '../utils/logger';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', { apiVersion: '2024-12-18.acacia' });
+let _stripe: Stripe | null = null;
+function getStripe(): Stripe {
+  if (!_stripe) {
+    const key = process.env.STRIPE_SECRET_KEY;
+    if (!key) throw new Error('STRIPE_SECRET_KEY is not configured');
+    _stripe = new Stripe(key, { apiVersion: '2024-12-18.acacia' });
+  }
+  return _stripe!;
+}
+const stripe = new Proxy({} as Stripe, {
+  get: (_target, prop) => (getStripe() as any)[prop],
+});
 
 export default class Payments extends Model {
 

@@ -4,9 +4,9 @@
   "description": "",
   "main": "app.ts",
   "scripts": {
-    "start": "node --max-old-space-size=4096 -r ts-node/register src/app.ts",
+    "start": "node --max-old-space-size=384 -r ts-node/register src/app.ts",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "nodemon --exec node --max-old-space-size=4096 -r ts-node/register src/app.ts",
+    "dev": "nodemon --exec node --max-old-space-size=384 -r ts-node/register src/app.ts",
     "test:tiktok": "ts-node src/tests/tiktok-analytics.test.ts",
     "test:tiktok-simple": "node run-tiktok-test.js",
     "test:tiktok-posts": "ts-node src/tests/tiktok-posts.test.ts",

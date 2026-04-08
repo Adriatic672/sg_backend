@@ -13,4 +13,4 @@ RUN npm install
 
 # Bundle app source
 COPY . .
-CMD ["node", "--max-old-space-size=4096", "node_modules/.bin/ts-node", "src/app.ts"]
+CMD ["node", "--max-old-space-size=384", "node_modules/.bin/ts-node", "src/app.ts"]

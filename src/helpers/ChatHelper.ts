@@ -5,7 +5,7 @@ import { sendNotification } from '../helpers/FCM';
 import { getItem, setItem } from '../helpers/connectRedis';
 import BaseModel from './base.model';
 
-class ChatHelper extends BaseModel {
+class ChatHelper extends Model {
   generateConversationId(userId1: string, userId2: string): string {
     const sortedIds = [userId1, userId2].sort();
     return sortedIds.join("_");
@@ -49,7 +49,8 @@ class ChatHelper extends BaseModel {
         text,
         status: "SENT",
         timestamp: new Date().toISOString(),
-        media: media ? media : null
+        media: media ? media : null,
+        edited: false
       };
 
       await createItem<ChatMessage>("chats", "messageId", message);

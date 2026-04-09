@@ -450,14 +450,7 @@ class Accounts extends Model {
         }
         return this.makeResponse(404, "Incorrect email or password");
       }
-      const email_verified = user.email_verified
-      if (email_verified == 'no') {
-        // Send OTP to email
-        const first_name = user.name;
-        const otp = await this.getOTP(email);
-        this.sendEmail("VERIFY_EMAIL", email, first_name, otp);
-        return this.makeResponse(202, "Email not verified");
-      }
+      // Email verification temporarily disabled
 
       if (user.status == 'pendingDelete') {
 
@@ -554,23 +547,12 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
     let role = user.user_type;
     try {
 
-      let profile: any = {};
-      try {
-        profile = await this.getUsersProfile(user_id) || {};
-      } catch (error) {
-        logger.error("Error fetching user profile:", error);
-      }
+      const profile: any = await this.getUsersProfile(user_id)
+      const profileInfo: any = await this.getUserByUserId(user_id)
 
-      let profileInfo: any = [];
-      try {
-        profileInfo = await this.getUserByUserId(user_id);
-      } catch (error) {
-        logger.error("Error fetching user profile info:", error);
-      }
-
-      const username = profileInfo[0]?.username || user_id
-      const first_name = profileInfo[0]?.first_name || username
-      let fcm_token = profileInfo[0]?.fcm_token;
+      const username = profileInfo[0].username || user_id
+      const first_name = profileInfo[0].first_name || username
+      let fcm_token = profileInfo[0].fcm_token;
 
 
 
@@ -972,26 +954,13 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
         }
       }
 
-      const otp = await this.getOTP(email);
       const existingUsers: any = await this.getUserByEmail(email);
       if (existingUsers.length > 0) {
-        const status = existingUsers[0].status;
-        if (status == 'draft') {
-          this.sendEmail("SIGNUP", email, "", otp);
-          return this.makeResponse(200, "Signup successful, please verify your account", {
-            user_id: existingUsers[0].user_id,
-            phone_number: existingUsers[0].phone,
-            first_name: existingUsers[0].first_name,
-            last_name: existingUsers[0].last_name,
-            referral_code: "",
-            username: existingUsers[0].username
-          });
-        }
         return this.makeResponse(400, "Email already exists");
       }
 
       const hashPassword = this.hashPassword(random_password);
-      const newUser = { user_id: userId, business_id: userId, user_type, email, password: hashPassword, status: "draft", source };
+      const newUser = { user_id: userId, business_id: userId, user_type, email, password: hashPassword, status: "active", email_verified: "yes", source };
       await this.insertData("users", newUser);
 
       const username = await this.getNextUsername();
@@ -1076,22 +1045,10 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
       }
 
       if (source == "apple" || source == "google") {
-        await this.updateData("users", `email='${email}'`, { email_verified: 'yes', status: "active" });
         this.rewardGems(userId, 30, 'SIGN_UP_POINTS');
-        return this.makeResponse(200, "Signup successful", {
-          user_id: userId,
-          phone_number: newPhone,
-          first_name: first_name,
-          last_name: last_name,
-          referral_code: referal_code,
-          username,
-          source: source
-        });
-      } else {
-        this.sendEmail("SIGNUP", email, "", otp);
       }
 
-      return this.makeResponse(200, "Signup successful, please verify your account", {
+      return this.makeResponse(200, "Signup successful", {
         user_id: userId,
         phone_number: newPhone,
         first_name: first_name,

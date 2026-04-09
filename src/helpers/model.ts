@@ -490,7 +490,8 @@ export default class Model extends BaseModel {
     }
 
     async getUserByEmail(email: string) {
-        return await this.callQuerySafe(`SELECT * FROM users  u inner join users_profile p on u.user_id=p.user_id where u.email ='${email}' `);
+        const normalizedEmail = email?.toLowerCase().trim();
+        return await this.callQuerySafe(`SELECT * FROM users  u inner join users_profile p on u.user_id=p.user_id where LOWER(u.email) ='${normalizedEmail}' `);
     }
 
     async getUserCompleteprofile(userId: string) {

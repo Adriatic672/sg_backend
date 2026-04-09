@@ -416,9 +416,10 @@ class Accounts extends Model {
 
 
   async login(data: any) {
-    const { email, password } = data;
+    const { password } = data;
+    const email = data.email?.toLowerCase().trim();
     try {
-      const users: any = await this.callQuerySafe(`select user_id,status, level_id, email, user_type, email_verified, password from users where email = '${email}'`);
+      const users: any = await this.callQuerySafe(`select user_id,status, level_id, email, user_type, email_verified, password from users where LOWER(email) = '${email}'`);
       const user = users.length > 0 ? users[0] : null;
 
       if (!user) {

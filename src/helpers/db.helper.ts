@@ -13,8 +13,9 @@ class DbHelper {
     if (connectionType === 'normal') {
  
       return mysql.createPool({
-        connectionLimit: 1,
+        connectionLimit: 10,
         host: process.env.HOST_NAME,
+        port: parseInt(process.env.DB_PORT || process.env.PORT || '3306'),
         database: process.env.DBNAME,
         user: process.env.USER_NAME,
         password: process.env.PASSWORD,

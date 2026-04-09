@@ -781,7 +781,11 @@ export default class Model extends BaseModel {
         const walletObj = {
             cron_title,
         }
-        await this.insertData(`cron_log	`, walletObj)
+        try {
+            await this.insertData(`cron_log`, walletObj)
+        } catch (error) {
+            console.error(`[CW-ERROR] Failed to save cron log for ${cron_title}:`, error);
+        }
         return walletObj;
     }
 

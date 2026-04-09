@@ -93,7 +93,7 @@ class BaseModel {
         query: query.substring(0, 100), // Log first 100 chars of query
         operation: 'callQuerySafe'
       });
-      return [];
+      throw error;
     }
   }
 
@@ -106,7 +106,7 @@ class BaseModel {
       return result;
     } catch (error) {
       logger.error("Query", error);
-      return [];
+      throw error;
     }
   }
 

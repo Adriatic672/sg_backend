@@ -10,12 +10,19 @@ class DbHelper {
     this.normalPool = this.initializePool('normal');
   }
   public initializePool(connectionType: string) {
+    const commonOptions = {
+      waitForConnections: true,
+      queueLimit: 0,
+      connectTimeout: 30000,
+      enableKeepAlive: true as true,
+      keepAliveInitialDelay: 10000,
+    };
     if (connectionType === 'normal') {
- 
       return mysql.createPool({
+        ...commonOptions,
         connectionLimit: 10,
         host: process.env.HOST_NAME,
-        port: parseInt(process.env.DB_PORT || process.env.PORT || '3306'),
+        port: parseInt(process.env.DB_PORT || '3306'),
         database: process.env.DBNAME,
         user: process.env.USER_NAME,
         password: process.env.PASSWORD,
@@ -23,6 +30,7 @@ class DbHelper {
     }
     if (connectionType === 'write') {
       return mysql.createPool({
+        ...commonOptions,
         connectionLimit: 1,
         host: process.env.WRITE_NAME,
         database: process.env.WRITE_DBNAME,
@@ -32,6 +40,7 @@ class DbHelper {
     }
     if (connectionType === 'read') {
       return mysql.createPool({
+        ...commonOptions,
         connectionLimit: 1,
         host: process.env.READ_HOST_NAME,
         database: process.env.READ_DBNAME,

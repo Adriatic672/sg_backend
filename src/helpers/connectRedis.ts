@@ -5,44 +5,46 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const redisUrl = process.env.REDIS_DB_URL;
-const redisClient = createClient({
-  url: redisUrl,
-});
 
-const connectRedis = async () => {
-  try {
-    await redisClient.connect();
-  } catch (err: any) {
-    console.log(err.message);
-    setTimeout(connectRedis, 5000);
-  }
-};
+let redisClient: any = null;
+let redisReady = false;
 
-connectRedis();
+if (!redisUrl) {
+  console.warn('[Redis] REDIS_DB_URL not set — Redis disabled, running without cache.');
+} else {
+  redisClient = createClient({ url: redisUrl });
 
-redisClient.on('connect', () => console.log('Redis client connected...'));
+  redisClient.on('connect', () => {
+    redisReady = true;
+    console.log('Redis client connected...');
+  });
 
-redisClient.on('error', (err) => console.log(err));
+  redisClient.on('error', (err: any) => {
+    redisReady = false;
+    console.error('[Redis] connection error:', err.message);
+  });
 
+  redisClient.connect().catch((err: any) => {
+    console.error('[Redis] initial connect failed:', err.message);
+  });
+}
 
 const setItem = async (key: string, value: string): Promise<void> => {
+  if (!redisReady || !redisClient) return;
   try {
-    await redisClient.set(key, value); // No expiration set
-    console.log(`Key "${key}" set successfully.`);
-  } catch (err) {
-    console.error(`Error setting key "${key}":`, err);
+    await redisClient.set(key, value);
+  } catch (err: any) {
+    console.error(`[Redis] Error setting key "${key}":`, err.message);
   }
 };
 
-
 const getItem = async (key: string): Promise<string | null> => {
+  if (!redisReady || !redisClient) return null;
   try {
-    const value = await redisClient.get(key);
-    console.log(`Value for key "${key}":`, value);
-    return value;
-  } catch (err) {
-    console.error(`Error getting key "${key}":`, err);
-    return "";
+    return await redisClient.get(key);
+  } catch (err: any) {
+    console.error(`[Redis] Error getting key "${key}":`, err.message);
+    return null;
   }
 };
 

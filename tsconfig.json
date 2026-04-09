@@ -4,8 +4,9 @@
     "module": "commonjs",
     "outDir": "./dist",
     "strict": true,
-    "esModuleInterop": true
+    "esModuleInterop": true,
+    "skipLibCheck": true
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules"]
+  "exclude": ["node_modules", "src/controllers/admin-seed.ts", "src/scripts"]
 }

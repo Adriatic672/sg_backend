@@ -3,7 +3,6 @@ import { ChatMessage, Conversation } from '../interfaces/dynamodb.interfaces';
 import Model from "../helpers/model";
 import { sendNotification } from '../helpers/FCM';
 import { getItem, setItem } from '../helpers/connectRedis';
-import BaseModel from './base.model';
 
 class ChatHelper extends Model {
   generateConversationId(userId1: string, userId2: string): string {

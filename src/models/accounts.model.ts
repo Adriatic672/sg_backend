@@ -541,56 +541,44 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
     logger.info(`userOj`, user)
     let user_id = user.user_id;
     let role = user.user_type;
+    let profile: any = {};
+    let username = user_id;
+    let first_name = user_id;
+    let fcm_token = '';
+
     try {
-
-      const profile: any = await this.getUsersProfile(user_id)
-      const profileInfo: any = await this.getUserByUserId(user_id)
-
+      const profileInfo: any = await this.getUserByUserId(user_id);
       const profileRow = profileInfo && profileInfo.length > 0 ? profileInfo[0] : {};
-      const username = profileRow.username || user_id;
-      const first_name = profileRow.first_name || username;
-      let fcm_token = profileRow.fcm_token;
+      username = profileRow.username || user_id;
+      first_name = profileRow.first_name || username;
+      fcm_token = profileRow.fcm_token || '';
+    } catch (e) { logger.error("Error fetching profile info:", e); }
 
+    try {
+      profile = await this.getUsersProfile(user_id) || {};
+    } catch (e) { logger.error("Error fetching user profile:", e); }
 
+    const accessTokenTime = 43200;
+    const refreshTokenTime = 86400;
+    const jwts: any = process.env.JWT_SECRET;
+    const token1 = jwt.sign({ role, user_id, username, type: 'access' }, jwts, { expiresIn: accessTokenTime });
+    const token2 = jwt.sign({ role: 'none', user_id, username, type: 'refresh' }, jwts, { expiresIn: refreshTokenTime });
 
-      //const accessTokenTime = 86400
-      const accessTokenTime = 43200
-      const refreshTokenTime = 86400
-      const jwts: any = process.env.JWT_SECRET;
-      const token1 = jwt.sign({ role, user_id, username, type: 'access' }, jwts, {
-        expiresIn: accessTokenTime,
-      });
+    try {
+      setItem(`fcm_${user_id}`, fcm_token);
+      setItem(`user_username_${user_id}`, username);
+      setItem(`user_first_name_${user_id}`, first_name);
+      setItem(`jwt_${user_id}`, token1);
+    } catch (e) { logger.error("Error setting cache:", e); }
 
-      const token2 = jwt.sign({ role: 'none', user_id, username, type: 'refresh' }, jwts, {
-        expiresIn: refreshTokenTime,
-      });
+    try {
+      await this.updateData("users_profile", `user_id='${user_id}'`, { fcm_token: "" });
+    } catch (e) { logger.error("Error updating fcm_token:", e); }
 
-      logger.info(`userProfileLogin`, profileInfo)
+    try { this.updateSocialProfiles(user_id); } catch (e) {}
 
-      try {
-        setItem(`fcm_${user_id}`, fcm_token)
-        setItem(`user_username_${user_id}`, username)
-        setItem(`user_first_name_${user_id}`, first_name)
-        setItem(`jwt_${user_id}`, token1)
-
-        //   this.addUserToChannel(user_id)
-
-      } catch (error) {
-        logger.error("Error in login:", error);
-      }
-
-      if (profileInfo && profileInfo.length > 0) {
-        await this.updateData("users_profile", `user_id='${user_id}'`, { fcm_token: "" });
-      }
-      this.updateSocialProfiles(user_id);
-
-      const response = { ...profile, jwt: token1, refreshToken: token2 };
-      return this.makeResponse(200, "Login successful", response);
-    } catch (error) {
-      logger.error("Error in login:", error);
-      this.logOperation("LOGIN_FAILED", user_id, "LOGIN_FAILED", "", error);
-      return this.makeResponse(500, "User account not found.");
-    }
+    const response = { ...profile, jwt: token1, refreshToken: token2 };
+    return this.makeResponse(200, "Login successful", response);
   }
 
   async AgentLogin(data: any) {

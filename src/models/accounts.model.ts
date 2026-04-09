@@ -960,7 +960,7 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
       }
 
       const hashPassword = this.hashPassword(random_password);
-      const newUser = { user_id: userId, business_id: userId, user_type, email, password: hashPassword, status: "active", email_verified: "yes", source };
+      const newUser = { user_id: userId, business_id: userId, user_type, email, password: hashPassword, status: "draft", source };
       await this.insertData("users", newUser);
 
       const username = await this.getNextUsername();
@@ -1515,12 +1515,8 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
       }
       const user = userInfo[0];
 
-      if (user.status == 'draft') {
-        resp = await this.getTemporaryToken(email, user_id, "draft")
-        return this.makeResponse(200, "Email verified successfully", resp);
-      } else {
-        return this.makeResponse(200, "Email verified successfully");
-      }
+      resp = await this.getTemporaryToken(email, user_id, user.status)
+      return this.makeResponse(200, "Email verified successfully", resp);
 
     } catch (error) {
       console.error("Error in verifyEmail:", error);

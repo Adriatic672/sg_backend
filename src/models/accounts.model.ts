@@ -450,8 +450,8 @@ class Accounts extends Model {
         }
         return this.makeResponse(404, "Incorrect email or password");
       }
-      // Email verification temporarily disabled
 
+      // Email verification temporarily disabled
       if (user.status == 'pendingDelete') {
 
         const resp = await this.getTemporaryToken(email, user_id, "draft")
@@ -960,7 +960,7 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
       }
 
       const hashPassword = this.hashPassword(random_password);
-      const newUser = { user_id: userId, business_id: userId, user_type, email, password: hashPassword, status: "draft", source };
+      const newUser = { user_id: userId, business_id: userId, user_type, email, password: hashPassword, status: "active", source };
       await this.insertData("users", newUser);
 
       const username = await this.getNextUsername();
@@ -1505,7 +1505,7 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
         return this.makeResponse(400, "Invalid OTP");
       }
 
-      await this.updateData("users", `email='${email}'`, { email_verified: 'yes' });
+      await this.updateData("users", `email='${email}'`, { email_verified: 'yes', status: 'active' });
 
       let resp = {};
 

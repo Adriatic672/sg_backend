@@ -717,7 +717,10 @@ export default class Model extends BaseModel {
             user.has_pin = false
         }
 
-        const averageRating = await this.getUserAverageRating(userId);
+        let averageRating = 0;
+        try {
+            averageRating = await this.getUserAverageRating(userId);
+        } catch (error) {}
         user.average_rating = averageRating;
 
         const wallet = await this.getUserWallet(userId)

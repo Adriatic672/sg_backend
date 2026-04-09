@@ -554,12 +554,23 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
     let role = user.user_type;
     try {
 
-      const profile: any = await this.getUsersProfile(user_id)
-      const profileInfo: any = await this.getUserByUserId(user_id)
+      let profile: any = {};
+      try {
+        profile = await this.getUsersProfile(user_id) || {};
+      } catch (error) {
+        logger.error("Error fetching user profile:", error);
+      }
 
-      const username = profileInfo[0].username || user_id
-      const first_name = profileInfo[0].first_name || username
-      let fcm_token = profileInfo[0].fcm_token;
+      let profileInfo: any = [];
+      try {
+        profileInfo = await this.getUserByUserId(user_id);
+      } catch (error) {
+        logger.error("Error fetching user profile info:", error);
+      }
+
+      const username = profileInfo[0]?.username || user_id
+      const first_name = profileInfo[0]?.first_name || username
+      let fcm_token = profileInfo[0]?.fcm_token;
 
 
 

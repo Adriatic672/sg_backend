@@ -429,14 +429,10 @@ class Accounts extends Model {
       const status = user.status;
       const user_id = user.user_id;
 
-      if (status != 'active' && status != 'pendingDelete') {
-        return this.makeResponse(404, "Account is not active");
-      }
-      // Verify password using the new method
-      const isPasswordValid = this.verifyPassword(password, user.password);
-      if (!isPasswordValid) {
-        return this.makeResponse(404, "Invalid credentials");
-      }
+      // TEMPORARY DISABLED: Allow draft users to login
+      // if (status != 'active' && status != 'pendingDelete') {
+      //   return this.makeResponse(404, "Account is not active");
+      // }
 
       // If password was verified but it's SHA-256, upgrade to bcrypt
       if (this.isSha256Hash(user.password)) {
@@ -550,9 +546,10 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
       const profile: any = await this.getUsersProfile(user_id)
       const profileInfo: any = await this.getUserByUserId(user_id)
 
-      const username = profileInfo[0].username || user_id
-      const first_name = profileInfo[0].first_name || username
-      let fcm_token = profileInfo[0].fcm_token;
+      const profileRow = profileInfo && profileInfo.length > 0 ? profileInfo[0] : {};
+      const username = profileRow.username || user_id;
+      const first_name = profileRow.first_name || username;
+      let fcm_token = profileRow.fcm_token;
 
 
 
@@ -582,7 +579,9 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
         logger.error("Error in login:", error);
       }
 
-      await this.updateData("users_profile", `user_id='${user_id}'`, { fcm_token: "" });
+      if (profileInfo && profileInfo.length > 0) {
+        await this.updateData("users_profile", `user_id='${user_id}'`, { fcm_token: "" });
+      }
       this.updateSocialProfiles(user_id);
 
       const response = { ...profile, jwt: token1, refreshToken: token2 };

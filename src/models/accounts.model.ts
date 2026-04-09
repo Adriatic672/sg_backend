@@ -577,7 +577,7 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
 
     try { this.updateSocialProfiles(user_id); } catch (e) {}
 
-    const response = { ...profile, jwt: token1, refreshToken: token2 };
+    const response = { user_id, user_type: role, ...profile, jwt: token1, refreshToken: token2 };
     return this.makeResponse(200, "Login successful", response);
   }
 

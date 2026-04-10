@@ -97,6 +97,7 @@ router.post('/forgot-password', forgotPassword);
 router.post('/reset-password', resetPasswordWithOTP);
 router.get('/getUsersByRegion', applyJWTConditionally, getUsersByRegion);
 router.get('/filterCreators', applyJWTConditionally, filterCreators);
+router.get('/getJobs', applyJWTConditionally, getJobs);
 
 
 async function filterCreators(req: Request, res: Response) {
@@ -114,6 +115,21 @@ async function filterCreators(req: Request, res: Response) {
     res.status(200).json(result);
   } catch (error) {
     res.status(500).json({ message: 'Error filtering creators', error });
+  }
+}
+
+async function getJobs(req: Request, res: Response) {
+  try {
+    const { status, q, page, limit } = req.query;
+    const result = await companyServices.getJobs({
+      status: status as string,
+      q: q as string,
+      page: page as string,
+      limit: limit as string,
+    });
+    res.status(200).json(result);
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching jobs', error });
   }
 }
 

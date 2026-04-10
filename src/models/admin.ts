@@ -1017,6 +1017,71 @@ COALESCE(p.username, 'admin') AS username,
     };
   }
 
+  async getJobs({ status, q, page, limit }: { status?: string; q?: string; page?: string; limit?: string }) {
+    const pageNum = Math.max(1, parseInt(page || '1'));
+    const pageSize = Math.min(100, parseInt(limit || '50'));
+    const offset = (pageNum - 1) * pageSize;
+
+    const conditions: string[] = [];
+    const params: any[] = [];
+
+    if (status && status !== 'all') {
+      conditions.push(`j.status = ?`);
+      params.push(status);
+    }
+    if (q) {
+      conditions.push(`(j.title LIKE ? OR bp.name LIKE ?)`);
+      params.push(`%${q}%`, `%${q}%`);
+    }
+
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const rows = await this.callQuerySafe(`
+      SELECT
+        j.job_id,
+        j.title,
+        j.status,
+        j.comp_amount,
+        j.comp_currency,
+        j.comp_type,
+        j.niche,
+        j.min_followers,
+        j.deadline,
+        j.created_at,
+        j.campaign_id,
+        bp.name AS brand_name,
+        c.title AS campaign_title,
+        c.status AS campaign_status,
+        COUNT(DISTINCT ji.interest_id) AS interest_count,
+        SUM(CASE WHEN ji.status = 'shortlisted' THEN 1 ELSE 0 END) AS shortlisted_count,
+        SUM(CASE WHEN ji.status = 'rejected' THEN 1 ELSE 0 END) AS rejected_count
+      FROM jb_job_posts j
+      LEFT JOIN business_profile bp ON j.brand_id = bp.business_id
+      LEFT JOIN act_campaigns c ON j.campaign_id = c.campaign_id
+      LEFT JOIN jb_job_interests ji ON j.job_id = ji.job_id
+      ${where}
+      GROUP BY j.job_id, j.title, j.status, j.comp_amount, j.comp_currency, j.comp_type,
+               j.niche, j.min_followers, j.deadline, j.created_at, j.campaign_id,
+               bp.name, c.title, c.status
+      ORDER BY j.created_at DESC
+      LIMIT ? OFFSET ?
+    `, [...params, pageSize, offset]);
+
+    const countRows = await this.callQuerySafe(`
+      SELECT COUNT(DISTINCT j.job_id) AS total
+      FROM jb_job_posts j
+      LEFT JOIN business_profile bp ON j.brand_id = bp.business_id
+      ${where}
+    `, params);
+
+    return {
+      jobs: rows,
+      total: countRows[0]?.total || 0,
+      page: pageNum,
+      limit: pageSize,
+    };
+  }
+
   async getApplicationsPerCampaign() {
     return await this.callQuerySafe(`
       SELECT

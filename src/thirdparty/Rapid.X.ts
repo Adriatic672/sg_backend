@@ -4,10 +4,11 @@ import { AnalyticsCalculator, SocialPost, UserInfo } from '../helpers/analyticsC
 
 export default class RapiAPI {
   private axiosInstance = axios.create({
-    baseURL: 'https://twitter-api45.p.rapidapi.com',
+    baseURL: 'https://twitter-v1-1-v2-api.p.rapidapi.com',
     headers: {
       'x-rapidapi-key': process.env.RAPIDAPI_KEY,
-      'x-rapidapi-host': 'twitter-api45.p.rapidapi.com'
+      'x-rapidapi-host': 'twitter-v1-1-v2-api.p.rapidapi.com',
+      'Content-Type': 'application/json'
     }
   });
 
@@ -19,12 +20,24 @@ export default class RapiAPI {
     return this.axiosInstance.post(url, data, config);
   }
 
+  // Resolve username -> userId using UserByScreenName
+  private async resolveUserId(screenname: string): Promise<string | null> {
+    try {
+      const variables = JSON.stringify({ screen_name: screenname });
+      const response = await this.get('/graphql/UserByScreenName', { variables });
+      const user = response.data?.data?.user?.result?.legacy || response.data?.data?.user?.result;
+      const id = response.data?.data?.user?.result?.rest_id || user?.id_str;
+      return id || null;
+    } catch (error) {
+      console.error('Error resolving Twitter userId:', error);
+      return null;
+    }
+  }
+
   public async getXFollowers(screenname: string): Promise<number> {
     try {
-      const response = await this.get('/screenname.php', { screenname });
-      console.log('getFollowers-x', response);
-      const { sub_count } = response.data;
-      return sub_count;
+      const userInfo = await this.getUserInfo(screenname);
+      return userInfo?.user?.followers_count || 0;
     } catch (error) {
       console.error("Error fetching followers from Twitter:", error);
       return 0;
@@ -33,53 +46,60 @@ export default class RapiAPI {
 
   public async verifyTweet(username: string, tweetId: string, searchText: string): Promise<boolean> {
     try {
-      const response = await this.get('/tweet.php', { id: tweetId });
-      const tweetData = response.data;
-      console.log(`tweetData1`, tweetData)
+      const variables = JSON.stringify({ focalTweetId: tweetId, count: 1 });
+      const response = await this.get('/graphql/TweetDetail', { variables });
+      const entries = response.data?.data?.threaded_conversation_with_injections_v2?.instructions?.[0]?.entries || [];
+      const tweetEntry = entries.find((e: any) => e.entryId?.startsWith('tweet-'));
+      const result = tweetEntry?.content?.itemContent?.tweet_results?.result;
+      const tweetUser = result?.core?.user_results?.result?.legacy?.screen_name || '';
+      const tweetText = result?.legacy?.full_text || '';
 
-      const tweetUser = tweetData.author.screen_name || (tweetData.user && tweetData.user.screen_name);
-      if (tweetUser.toLowerCase() !== username.toLocaleLowerCase()) {
-        return false;
-      }
-      console.log(`tweetData.text`, tweetData.text)
-      console.log(`tweetData.searchText`, searchText)
-      const tweetText = tweetData.text || (tweetData.tweet && tweetData.tweet.text);
-      if (!tweetText.toLocaleLowerCase().includes(searchText)) {
-        return false;
-      }
+      console.log('verifyTweet user:', tweetUser, 'text:', tweetText);
+
+      if (tweetUser.toLowerCase() !== username.toLowerCase()) return false;
+      if (!tweetText.toLowerCase().includes(searchText.toLowerCase())) return false;
       return true;
     } catch (error) {
-      console.error("Error fetching tweet:", error);
+      console.error("Error verifying tweet:", error);
       return false;
     }
   }
 
-  // Simple method to get user posts from timeline
   public async getUserPosts(screenname: string): Promise<SocialPost[]> {
     try {
       console.log(`🔍 Fetching Twitter posts for @${screenname}...`);
-      
-      const response = await this.get('/timeline.php', { screenname });
-      console.log('Timeline response received');
-      
-      if (!response.data || !response.data.timeline) {
-        console.log('No timeline data found');
-        return [];
-      }
+      const userId = await this.resolveUserId(screenname);
+      if (!userId) return [];
 
-      const posts = response.data.timeline.map((tweet: any): SocialPost => ({
-        id: tweet.tweet_id,
-        text: tweet.text,
-        createdAt: tweet.created_at,
-        likes: tweet.favorites || 0,
-        comments: tweet.replies || 0,
-        shares: (tweet.retweets || 0) + (tweet.quotes || 0),
-        views: tweet.views || 0,
-        media: tweet.media || [],
-        entities: tweet.entities || {}
-      }));
+      const variables = JSON.stringify({
+        userId,
+        count: 20,
+        includePromotedContent: false,
+        withQuickPromoteEligibilityTweetFields: true,
+        withVoice: true,
+        withV2Timeline: true
+      });
+      const response = await this.get('/graphql/UserTweets', { variables });
+      const instructions = response.data?.data?.user?.result?.timeline_v2?.timeline?.instructions || [];
+      const entries = instructions.find((i: any) => i.type === 'TimelineAddEntries')?.entries || [];
 
-      console.log(`📊 Extracted ${posts.length} posts from Twitter timeline`);
+      const posts: SocialPost[] = entries
+        .filter((e: any) => e.entryId?.startsWith('tweet-'))
+        .map((e: any) => {
+          const t = e.content?.itemContent?.tweet_results?.result?.legacy;
+          return {
+            id: t?.id_str || e.entryId,
+            text: t?.full_text || '',
+            createdAt: t?.created_at || new Date().toISOString(),
+            likes: t?.favorite_count || 0,
+            comments: t?.reply_count || 0,
+            shares: (t?.retweet_count || 0) + (t?.quote_count || 0),
+            views: t?.views?.count || 0,
+            media: t?.entities?.media || []
+          };
+        });
+
+      console.log(`📊 Extracted ${posts.length} posts from Twitter`);
       return posts;
     } catch (error) {
       console.error("Error fetching Twitter posts:", error);
@@ -89,58 +109,47 @@ export default class RapiAPI {
 
   public async getUserAnalytics(username: string): Promise<any> {
     try {
-      // First get user info to get the user ID
       const userInfo = await this.getUserInfo(username);
-      console.log("userInfo", userInfo);
-      const userId = userInfo?.user?.id;
-      const followers = userInfo?.user?.followers_count;
-      
-      if (!userId) {
-        console.log('No user ID found for username:', username);
-        return {};
-      }
-      
-      const [posts] = await Promise.all([
-        this.getUserPosts(username),
-      ]);
+      const followers = userInfo?.user?.followers_count || 0;
+      if (!userInfo?.user?.id) return {};
 
-      // Ensure posts is an array
+      const posts = await this.getUserPosts(username);
       const postsArray = Array.isArray(posts) ? posts : [];
-      console.log("postsArray", postsArray);
 
       return {
-        overview: AnalyticsCalculator.calculateOverview(userInfo, postsArray, followers || 0),
-        audienceQualityScore: AnalyticsCalculator.calculateAudienceQualityScore(userInfo, postsArray, followers || 0),
+        overview: AnalyticsCalculator.calculateOverview(userInfo, postsArray, followers),
+        audienceQualityScore: AnalyticsCalculator.calculateAudienceQualityScore(userInfo, postsArray, followers),
         demographics: AnalyticsCalculator.calculateDemographics(userInfo, postsArray),
-        estimatedMetrics: AnalyticsCalculator.calculateEstimatedMetrics(postsArray, followers || 0),
+        estimatedMetrics: AnalyticsCalculator.calculateEstimatedMetrics(postsArray, followers),
         audienceBreakdown: AnalyticsCalculator.calculateAudienceBreakdown(userInfo, postsArray)
       };
     } catch (error) {
-      console.error("Error getting TikTok analytics:", error);
+      console.error("Error getting Twitter analytics:", error);
       return {};
     }
   }
 
-  // Simple method to get user info
   public async getUserInfo(screenname: string): Promise<UserInfo> {
     try {
-      const response = await this.get('/screenname.php', { screenname });
-      console.log('User info response received');
-      const responseData = response.data;
+      const variables = JSON.stringify({ screen_name: screenname });
+      const response = await this.get('/graphql/UserByScreenName', { variables });
+      const result = response.data?.data?.user?.result;
+      const legacy = result?.legacy;
+      console.log('Twitter getUserInfo response:', legacy);
       return {
         user: {
-          id: responseData.id,
-          followers_count: responseData.sub_count,
-          verified: responseData.blue_verified,
-          location: responseData.location,
-          created_at: responseData.created_at,
-          bio: responseData.desc,
-          name: responseData.name,
-          username: responseData.username
+          id: result?.rest_id || '',
+          followers_count: legacy?.followers_count || 0,
+          verified: legacy?.verified || result?.is_blue_verified || false,
+          location: legacy?.location || '',
+          created_at: legacy?.created_at || '',
+          bio: legacy?.description || '',
+          name: legacy?.name || '',
+          username: legacy?.screen_name || screenname
         }
-      }
+      };
     } catch (error) {
-      console.error("Error fetching user info:", error);
+      console.error("Error fetching Twitter user info:", error);
       return {};
     }
   }

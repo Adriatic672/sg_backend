@@ -7,10 +7,10 @@ export default class InstagramAPI {
     return false
   }
   private axiosInstance = axios.create({
-    baseURL: 'https://instagram120.p.rapidapi.com/api/instagram',
+    baseURL: 'https://simple-instagram-api.p.rapidapi.com',
     headers: {
       'x-rapidapi-key': process.env.RAPIDAPI_KEY,
-      'x-rapidapi-host': 'instagram120.p.rapidapi.com',
+      'x-rapidapi-host': 'simple-instagram-api.p.rapidapi.com',
       'Content-Type': 'application/json'
     }
   });
@@ -29,58 +29,37 @@ export default class InstagramAPI {
    */
   public async getFollowers(username: string): Promise<number> {
     try {
-      // Use POST to /profile endpoint
-      const response = await this.post('/profile', { username });
-      console.log('getFollowers-x (Instagram)', response.data);
-      console.log('getFollowers-x (Instagram)', response.data.data);
-      console.log('getFollowers-x (Instagram)', response.data.data.follower_count);
-      const count = response.data.data.follower_count
-      console.log("count", count);
+      const response = await this.get('/account-info', { username });
+      const count = response.data?.followers || response.data?.follower_count || 0;
+      console.log('getFollowers-x (Instagram)', count);
       return count;
     } catch (error) {
       console.error("Error fetching followers from Instagram:", error);
       return 0;
     }
   }
+
   async getUserInfo(username: string): Promise<UserInfo> {
-    // Try multiple endpoint variations as the API may use different naming
-    const endpoints = [
-      { url: '/userInfo', data: { username } },
-      { url: '/user_info', data: { username } },
-      { url: '/profile', data: { username } }
-    ];
-    
-    for (const endpoint of endpoints) {
-      try {
-        console.log(`Trying Instagram endpoint: ${endpoint.url}`);
-        const response = await this.post(endpoint.url, endpoint.data);
-        console.log(`Instagram ${endpoint.url} response:`, response.data);
-        
-        // Handle different response structures
-        const userData = response.data.data || response.data;
-        
-        if (userData) {
-          return {
-            user: {
-              id: userData.pk || userData.id || '',
-              followers_count: userData.follower_count || userData.followers_count || 0,
-              verified: userData.is_verified || userData.verified || false,
-              location: userData.city_name || userData.location || '',
-              created_at: userData.created_at || '',
-              bio: userData.biography || userData.bio || '',
-              name: userData.full_name || userData.name || '',
-              username: userData.username || username
-            }
-          };
+    try {
+      const response = await this.get('/account-info', { username });
+      const d = response.data;
+      console.log('Instagram getUserInfo response:', d);
+      return {
+        user: {
+          id: d.id || d.pk || '',
+          followers_count: d.followers || d.follower_count || 0,
+          verified: d.is_verified || d.verified || false,
+          location: d.city_name || d.location || '',
+          created_at: d.created_at || '',
+          bio: d.biography || d.bio || '',
+          name: d.full_name || d.name || '',
+          username: d.username || username
         }
-      } catch (error: any) {
-        console.log(`Endpoint ${endpoint.url} failed:`, error.response?.status, error.message);
-        // Continue to next endpoint
-      }
+      };
+    } catch (error: any) {
+      console.error('Instagram getUserInfo failed:', error.response?.status, error.message);
+      throw new Error('Instagram API getUserInfo failed');
     }
-    
-    // If all endpoints fail, throw error
-    throw new Error('All Instagram API endpoints failed');
   }
 
   /**
@@ -89,27 +68,26 @@ export default class InstagramAPI {
   public async getUserPosts(username: string): Promise<SocialPost[]> {
     try {
       console.log(`📸 Fetching Instagram posts for @${username}...`);
-      
-      // Use POST to /posts endpoint
-      const postsResponse = await this.post('/posts', { username });
+      const postsResponse = await this.get('/user-posts', { username });
       console.log('Instagram posts response received');
-      
-      if (!postsResponse.data?.data?.items || !Array.isArray(postsResponse.data.data.items)) {
+
+      const items = postsResponse.data?.posts || postsResponse.data?.data?.items || postsResponse.data || [];
+      if (!Array.isArray(items)) {
         console.log('No posts data found or invalid format');
         return [];
       }
-      
-      const posts:SocialPost[] = postsResponse.data.data.items.map((post: any): SocialPost   => ({
-        id: post.id || post.code,
+
+      const posts: SocialPost[] = items.map((post: any): SocialPost => ({
+        id: post.id || post.code || post.shortcode,
         likes: post.like_count || post.likes || 0,
         comments: post.comment_count || post.comments || 0,
         shares: post.bookmark_count || post.saves || 0,
         views: post.view_count || post.views || 0,
         createdAt: post.taken_at ? new Date(post.taken_at * 1000).toISOString() : new Date().toISOString(),
-        text: post.caption?.text || '',
-        media: post.display_url || post.media_url || post.image_versions2?.candidates?.[0]?.url || ''
+        text: post.caption?.text || post.caption || '',
+        media: post.display_url || post.media_url || ''
       }));
-      
+
       console.log(`📊 Extracted ${posts.length} Instagram posts`);
       return posts;
     } catch (error) {
@@ -124,30 +102,29 @@ export default class InstagramAPI {
   public async getUserReels(username: string): Promise<any[]> {
     try {
       console.log(`📸 Fetching Instagram reels for @${username}...`);
-      
-      // Use POST to /reels endpoint
-      const reelsResponse = await this.post('/reels', { username });
+      // Simple Instagram API doesn't have a separate reels endpoint — fall back to posts
+      const reelsResponse = await this.get('/user-posts', { username });
       console.log('Instagram reels response received');
-      
-      if (!reelsResponse.data?.data?.items || !Array.isArray(reelsResponse.data.data.items)) {
-        console.log('No reels data found or invalid format');
-        return [];
-      }
-      
-      const reels = reelsResponse.data.data.items.map((reel: any) => ({
-        id: reel.id || reel.code,
-        likes: reel.like_count || reel.likes || 0,
-        comments: reel.comment_count || reel.comments || 0,
-        saves: reel.bookmark_count || reel.saves || 0,
-        views: reel.view_count || reel.views || reel.play_count || 0,
-        created_at: reel.taken_at ? new Date(reel.taken_at * 1000).toISOString() : new Date().toISOString(),
-        caption: reel.caption?.text || '',
-        media_type: 'reel',
-        media_url: reel.display_url || reel.media_url || reel.image_versions2?.candidates?.[0]?.url || '',
-        video_url: reel.video_url || '',
-        duration: reel.video_duration || 0
-      }));
-      
+
+      const items = reelsResponse.data?.posts || reelsResponse.data?.data?.items || reelsResponse.data || [];
+      if (!Array.isArray(items)) return [];
+
+      const reels = items
+        .filter((item: any) => item.media_type === 'reel' || item.product_type === 'clips' || item.is_video)
+        .map((reel: any) => ({
+          id: reel.id || reel.code,
+          likes: reel.like_count || reel.likes || 0,
+          comments: reel.comment_count || reel.comments || 0,
+          saves: reel.bookmark_count || reel.saves || 0,
+          views: reel.view_count || reel.views || reel.play_count || 0,
+          created_at: reel.taken_at ? new Date(reel.taken_at * 1000).toISOString() : new Date().toISOString(),
+          caption: reel.caption?.text || reel.caption || '',
+          media_type: 'reel',
+          media_url: reel.display_url || reel.media_url || '',
+          video_url: reel.video_url || '',
+          duration: reel.video_duration || 0
+        }));
+
       console.log(`📊 Extracted ${reels.length} Instagram reels`);
       return reels;
     } catch (error) {
@@ -245,9 +222,8 @@ export default class InstagramAPI {
   
   public async verifyPost(username: string, postCode: string, searchText: string){
     try {
-      // Use POST to /mediaByShortcode endpoint
-      const response = await this.post('/mediaByShortcode', { shortcode: postCode });
-      const postData = response.data.data
+      const response = await this.get('/post-info', { shortcode: postCode });
+      const postData = response.data?.data || response.data
   
       // Extract post info
       const extracted = await this.extractPostInfo({ data: postData });

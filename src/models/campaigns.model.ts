@@ -158,9 +158,10 @@ export default class Campaigns extends Model {
       UPDATE act_campaign_invites
       SET invite_status = 'accepted',
           application_status = 'pending'
-      WHERE campaign_id = '${campaign_id}' 
+      WHERE campaign_id = '${campaign_id}'
         AND user_id = '${userId}'
     `);
+    this.updateCampaignCounters(campaign_id);
     return this.makeResponse(200, "Application submitted", response);
   }
 
@@ -324,7 +325,11 @@ export default class Campaigns extends Model {
       }
 
       const { created_by } = campaignInfo[0];
-      const activitystarted = await this.selectDataQuery(`act_campaign_invites`, `campaign_id='${campaign_id}' AND user_id='${userId}' AND action_status ='started'`)
+      const activitystarted = await this.callQuerySafe(`
+        SELECT * FROM act_campaign_invites
+        WHERE campaign_id='${campaign_id}' AND user_id='${userId}'
+          AND action_status IN ('started', 'revision_required')
+      `);
       if (activitystarted.length == 0) {
         return this.makeResponse(404, 'User campaign not in a status that can be completed')
       }
@@ -345,9 +350,11 @@ export default class Campaigns extends Model {
       }
 
       const id = activitystarted[0].id
+      const completedAt = new Date().toISOString().slice(0, 19).replace('T', ' ');
       const update = {
         activity_url,
-        action_status: 'completed'
+        action_status: 'completed',
+        completed_at: completedAt,
       }
       await this.updateData(`act_campaign_invites`, `id=${id}`, update)
 
@@ -369,6 +376,7 @@ export default class Campaigns extends Model {
         logger.error("activityComplete-5", error);
       }
 
+      this.updateCampaignCounters(campaign_id);
       return this.makeResponse(200, "Campaign marked as complete, you will be notified about the final status");
     } catch (error) {
       logger.error("activityComplete-6", error);
@@ -412,6 +420,39 @@ export default class Campaigns extends Model {
     }
   }
 
+  async requestRevision(data: any) {
+    try {
+      const { campaign_id, user_id, reason } = data;
+      if (!campaign_id || !user_id || !reason) {
+        return this.makeResponse(400, "campaign_id, user_id, and reason are required");
+      }
+
+      const invite: any = await this.callQuerySafe(`
+        SELECT * FROM act_campaign_invites
+        WHERE campaign_id='${campaign_id}' AND user_id='${user_id}' AND action_status='completed'
+      `);
+      if (invite.length === 0) {
+        return this.makeResponse(404, "No completed submission found for this creator on this campaign");
+      }
+
+      await this.updateData(
+        `act_campaign_invites`,
+        `campaign_id='${campaign_id}' AND user_id='${user_id}'`,
+        { action_status: 'revision_required', reason }
+      );
+
+      const campaign = await this.getCampaignByIdAnyStatus(campaign_id);
+      if (campaign.length === 0) { throw new Error("Campaign not found"); }
+      this.sendAppNotification(user_id, "REVISION_REQUIRED", reason, "", "", "", "CAMPAIGN", campaign[0].created_by);
+
+      this.updateCampaignCounters(campaign_id);
+      return this.makeResponse(200, "Revision requested successfully");
+    } catch (error) {
+      logger.error("requestRevision error:", error);
+      return this.makeResponse(500, "Error requesting revision");
+    }
+  }
+
   // =====================================
   // CAMPAIGN STATISTICS & ANALYTICS
   // =====================================
@@ -419,7 +460,7 @@ export default class Campaigns extends Model {
   async getCampaignStats(campaignId: string) {
     try {
       const response: any = await this.callQuerySafe(`
-        SELECT i.invite_status, i.action_status, c.budget, c.title, c.objective, c.start_date, c.end_date
+        SELECT i.invite_status, i.action_status, i.application_status, c.budget, c.title, c.objective, c.start_date, c.end_date
         FROM act_campaign_invites i
         INNER JOIN act_campaigns c ON i.campaign_id = c.campaign_id
         WHERE i.campaign_id = '${campaignId}'`);
@@ -445,10 +486,12 @@ export default class Campaigns extends Model {
 
       let invited = response.length;
       let accepted = 0, rejected = 0, started = 0, completed = 0;
+      let submitted = 0, approved = 0, revisionRequired = 0;
 
       response.forEach((row: any) => {
         const status = row.invite_status.toLowerCase();
         const action_status = row.action_status.toLowerCase();
+        const application_status = (row.application_status || '').toLowerCase();
 
         switch (action_status) {
           case 'started': started++; break;
@@ -457,6 +500,11 @@ export default class Campaigns extends Model {
         switch (status) {
           case 'accepted': accepted++; break;
           case 'rejected': rejected++; break;
+        }
+        switch (application_status) {
+          case 'submitted': submitted++; break;
+          case 'approved': approved++; break;
+          case 'revision_required': revisionRequired++; break;
         }
       });
 
@@ -475,6 +523,9 @@ export default class Campaigns extends Model {
         accepted,
         rejected,
         pending,
+        submitted,
+        approved,
+        revisionRequired,
         started,
         completed,
         droppedOut,
@@ -651,8 +702,15 @@ WHERE i.user_id = '${userId}' AND i.invite_status = '${status}' AND i.applicatio
   }
 
   async getMyCreatedCampaigns(userId: string) {
-    const response = await this.callQuerySafe(`
-SELECT c.*, COALESCE(COUNT(i.id), 0) AS invite_count 
+    const response: any = await this.callQuerySafe(`
+SELECT 
+  c.*, 
+  COALESCE(COUNT(i.id), 0) AS invite_count,
+  COALESCE(SUM(CASE WHEN i.invite_status = 'accepted' THEN 1 ELSE 0 END), 0) AS count_accepted,
+  COALESCE(SUM(CASE WHEN i.application_status = 'submitted' THEN 1 ELSE 0 END), 0) AS count_submitted,
+  COALESCE(SUM(CASE WHEN i.application_status = 'approved' THEN 1 ELSE 0 END), 0) AS count_approved,
+  COALESCE(SUM(CASE WHEN i.application_status = 'revision_required' THEN 1 ELSE 0 END), 0) AS count_revision_required,
+  COALESCE(SUM(CASE WHEN i.action_status = 'completed' THEN 1 ELSE 0 END), 0) AS count_completed
 FROM act_campaigns c 
 LEFT JOIN act_campaign_invites i ON c.campaign_id = i.campaign_id 
 WHERE c.created_by = '${userId}'  
@@ -695,9 +753,26 @@ GROUP BY c.campaign_id;
       campaignData.user_action = null;
     }
 
-    const acceptedUsersCount: any = await this.callQuerySafe(`select count(*) as count from act_campaign_invites where  campaign_id = '${campaign_id}' and invite_status ='accepted' `)
+    const counts: any = await this.callQuerySafe(`
+SELECT
+  COUNT(*) AS count_invited,
+  COALESCE(SUM(CASE WHEN invite_status = 'accepted' THEN 1 ELSE 0 END), 0) AS count_accepted,
+  COALESCE(SUM(CASE WHEN application_status = 'submitted' THEN 1 ELSE 0 END), 0) AS count_submitted,
+  COALESCE(SUM(CASE WHEN application_status = 'approved' THEN 1 ELSE 0 END), 0) AS count_approved,
+  COALESCE(SUM(CASE WHEN application_status = 'revision_required' THEN 1 ELSE 0 END), 0) AS count_revision_required,
+  COALESCE(SUM(CASE WHEN action_status = 'completed' THEN 1 ELSE 0 END), 0) AS count_completed
+FROM act_campaign_invites
+WHERE campaign_id = '${campaign_id}'`);
+
     const actedUsersArray = await this.callQuerySafe(`select i.invite_status, i.action_status,i.action_date, p.first_name, p.last_name,p.profile_pic from act_campaign_invites i INNER JOIN users_profile p ON  i.user_id = p.user_id where  campaign_id = '${campaign_id}' and invite_status='accepted'  LIMIT 5 `)
-    campaignData.actioned_users_total = acceptedUsersCount[0].count || 0
+    
+    campaignData.count_invited = counts[0].count_invited || 0;
+    campaignData.count_accepted = counts[0].count_accepted || 0;
+    campaignData.count_submitted = counts[0].count_submitted || 0;
+    campaignData.count_approved = counts[0].count_approved || 0;
+    campaignData.count_revision_required = counts[0].count_revision_required || 0;
+    campaignData.count_completed = counts[0].count_completed || 0;
+    campaignData.actioned_users_total = counts[0].count_accepted || 0;
     campaignData.actioned_users_top = actedUsersArray
     campaignData.sent_invites = userAction.length
     campaignData.tasks = await this.getCampaignTasks(campaign_id)
@@ -725,6 +800,114 @@ GROUP BY c.campaign_id;
     }
 
     return { valid: true, campaign: campaignData };
+  }
+
+  async updateCampaignCounters(campaignId: string) {
+    try {
+      const response: any = await this.callQuerySafe(`
+        SELECT invite_status, action_status, application_status
+        FROM act_campaign_invites
+        WHERE campaign_id = '${campaignId}'`);
+
+      let invited = response.length;
+      let accepted = 0, submitted = 0, approved = 0, revisionRequired = 0, completed = 0;
+
+      response.forEach((row: any) => {
+        const status = row.invite_status.toLowerCase();
+        const action_status = (row.action_status || '').toLowerCase();
+        const application_status = (row.application_status || '').toLowerCase();
+
+        if (status === 'accepted') accepted++;
+        if (action_status === 'completed') completed++;
+        if (application_status === 'submitted') submitted++;
+        if (application_status === 'approved') approved++;
+        if (application_status === 'revision_required') revisionRequired++;
+      });
+
+      await this.updateData("act_campaigns", `campaign_id = '${campaignId}'`, {
+        count_invited: invited,
+        count_accepted: accepted,
+        count_submitted: submitted,
+        count_approved: approved,
+        count_revision_required: revisionRequired,
+        count_completed: completed
+      });
+
+      return true;
+    } catch (error) {
+      logger.error("Error updating campaign counters:", error);
+      return false;
+    }
+  }
+
+  async calculateReliabilityScores() {
+    try {
+      // Get all creators who have at least one completed campaign invite
+      const creators: any = await this.callQuerySafe(`
+        SELECT DISTINCT i.user_id
+        FROM act_campaign_invites i
+        WHERE i.invite_status = 'accepted'
+      `);
+
+      let updated = 0;
+      for (const row of creators) {
+        const userId = row.user_id;
+
+        const stats: any = await this.callQuerySafe(`
+          SELECT
+            COUNT(*) AS total,
+            SUM(CASE WHEN i.action_status = 'completed' THEN 1 ELSE 0 END) AS completed,
+            SUM(CASE WHEN i.application_status = 'approved' THEN 1 ELSE 0 END) AS approved,
+            SUM(CASE WHEN i.application_status = 'revision_required' THEN 1 ELSE 0 END) AS revisions,
+            SUM(
+              CASE
+                WHEN i.action_status = 'completed'
+                  AND i.completed_at IS NOT NULL
+                  AND c.end_date IS NOT NULL
+                  AND i.completed_at <= c.end_date
+                THEN 1 ELSE 0
+              END
+            ) AS on_time
+          FROM act_campaign_invites i
+          INNER JOIN act_campaigns c ON i.campaign_id = c.campaign_id
+          WHERE i.user_id = '${userId}' AND i.invite_status = 'accepted'
+        `);
+
+        const s = stats[0];
+        const total = parseInt(s.total) || 0;
+        const completed = parseInt(s.completed) || 0;
+        const approved = parseInt(s.approved) || 0;
+        const revisions = parseInt(s.revisions) || 0;
+        const onTime = parseInt(s.on_time) || 0;
+
+        if (total === 0) continue;
+
+        // Completion rate (40%): how many accepted invites were completed
+        const completionRate = completed / total;
+
+        // Approval rate (35%): how many completed were approved vs needed revision
+        const reviewable = approved + revisions;
+        const approvalRate = reviewable > 0 ? approved / reviewable : completionRate;
+
+        // On-time rate (25%): completed before campaign end_date
+        const onTimeRate = completed > 0 ? onTime / completed : 0;
+
+        // Weighted score 0–5
+        const score = ((completionRate * 0.4) + (approvalRate * 0.35) + (onTimeRate * 0.25)) * 5;
+        const rounded = Math.round(score * 10) / 10;
+
+        await this.updateData(`users_profile`, `user_id = '${userId}'`, {
+          influencer_rating: rounded,
+        });
+        updated++;
+      }
+
+      logger.info(`calculateReliabilityScores: updated ${updated} creators`);
+      return updated;
+    } catch (error) {
+      logger.error("calculateReliabilityScores error:", error);
+      return 0;
+    }
   }
 
   async getDraftCampaign(campaignId: string) {
@@ -1401,6 +1584,7 @@ GROUP BY c.campaign_id;
       this.sendAppNotification(userId, "ACCEPT_INVITE", "", "", "", "", "CAMPAIGN", campaign[0].created_by);
     }
 
+    this.updateCampaignCounters(campaign_id);
     return this.makeResponse(200, `Invite ${status}`);
   }
 
@@ -1519,6 +1703,7 @@ GROUP BY c.campaign_id;
       if (approvedInfluencers2 >= number_of_influencers) {
         this.activateCampaign({ campaign_id, userId })
       }
+      this.updateCampaignCounters(campaign_id);
       return this.makeResponse(200, "Applications processed successfully", results);
     } catch (error) {
       this.rollbackTransaction();

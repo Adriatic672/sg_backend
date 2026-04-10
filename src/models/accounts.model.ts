@@ -419,32 +419,37 @@ class Accounts extends Model {
     const { password } = data;
     const email = data.email?.toLowerCase().trim();
     try {
-      const users: any = await this.callQuerySafe(`select user_id,status, level_id, email, user_type, email_verified, password from users where LOWER(email) = '${email}'`);
+      const users: any = await this.callQuerySafe(
+        `select user_id, status, level_id, email, user_type, email_verified, password from users where LOWER(email) = ?`,
+        [email]
+      );
       const user = users.length > 0 ? users[0] : null;
 
       if (!user) {
-        return this.makeResponse(404, "User not found");
-      }
-
-      const status = user.status;
-      const user_id = user.user_id;
-
-      // TEMPORARY DISABLED: Allow draft users to login
-      // if (status != 'active' && status != 'pendingDelete') {
-      //   return this.makeResponse(404, "Account is not active");
-      // }
-
-      // If password was verified but it's SHA-256, upgrade to bcrypt
-      if (this.isSha256Hash(user.password)) {
-        await this.upgradePasswordHash(user.user_id, password);
-      }
-
-      if (users.length === 0) {
+        // Check if this is an agent login
         const agentLogin = await this.AgentLogin(data);
         if (agentLogin.status == 200) {
           return agentLogin;
         }
         return this.makeResponse(404, "Incorrect email or password");
+      }
+
+      const user_id = user.user_id;
+
+      // Verify password before proceeding
+      const isPasswordValid = this.verifyPassword(password, user.password);
+      if (!isPasswordValid) {
+        return this.makeResponse(401, "Incorrect email or password");
+      }
+
+      // Upgrade SHA-256 hash to bcrypt after successful verification
+      if (this.isSha256Hash(user.password)) {
+        try {
+          await this.upgradePasswordHash(user.user_id, password);
+        } catch (upgradeError) {
+          logger.error("Error upgrading password hash:", upgradeError);
+          // Non-fatal: continue login even if upgrade fails
+        }
       }
 
       // Email verification temporarily disabled
@@ -475,7 +480,7 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
     } catch (error) {
       this.logOperation("LOGIN_FAILED", email, "LOGIN_FAILED", data, error);
       logger.error("Error in login:", error);
-      return this.makeResponse(500, "User account not found");
+      return this.makeResponse(500, "Login failed. Please try again.");
     }
   }
 
@@ -560,7 +565,11 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
 
     const accessTokenTime = 43200;
     const refreshTokenTime = 86400;
-    const jwts: any = process.env.JWT_SECRET;
+    const jwts = process.env.JWT_SECRET;
+    if (!jwts) {
+      logger.error("JWT_SECRET is not configured in environment variables");
+      throw new Error("Server configuration error: JWT_SECRET missing");
+    }
     const token1 = jwt.sign({ role, user_id, username, type: 'access' }, jwts, { expiresIn: accessTokenTime });
     const token2 = jwt.sign({ role: 'none', user_id, username, type: 'refresh' }, jwts, { expiresIn: refreshTokenTime });
 

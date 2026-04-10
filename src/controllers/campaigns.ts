@@ -28,6 +28,7 @@ router.post('/deleteCampaign', applyBrandJWTConditionally, deleteCampaign);
 router.post('/inviteUsers', applyBrandJWTConditionally, inviteUsers);
 router.post('/agentInviteUsers', applyBrandJWTConditionally, agentInviteUsers);
 router.post('/reject-submission', applyBrandJWTConditionally, rejectSubmission);
+router.post('/request-revision', applyBrandJWTConditionally, requestRevision);
 
 
 
@@ -92,6 +93,19 @@ async function rejectSubmission(req: Request, res: Response) {
     res.status(200).json(result);
   } catch (error) {
     res.status(500).json({ message: 'Error rejecting submission', error });
+  }
+}
+
+async function requestRevision(req: Request, res: Response) {
+  try {
+    const { campaign_id, user_id, reason } = req.body;
+    if (!campaign_id || !user_id || !reason) {
+      return res.status(400).json({ message: "campaign_id, user_id, and reason are required" });
+    }
+    const result = await campaign.requestRevision(req.body);
+    res.status(200).json(result);
+  } catch (error) {
+    res.status(500).json({ message: 'Error requesting revision', error });
   }
 }
 

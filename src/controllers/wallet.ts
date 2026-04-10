@@ -45,6 +45,7 @@ router.post('/withdrawRequest', applyJWTConditionally, withdrawRequest);
 router.post('/resetTransactionPin', applyJWTConditionally, resetTransactionPin);
 router.post('/getExchangeRate', applyJWTConditionally, getExchangeRate);
 router.get('/getTransactionById/:id', getTransactionById);
+router.get('/exportTransactions', applyJWTConditionally, exportTransactionsCSV);
  router.post('/pinlogin', applyJWTConditionally, async (req: Request, res: Response) => {
   try {
     const result = await pay.login(req.body);
@@ -250,6 +251,21 @@ async function InitPayment(req: Request, res: Response) {
     res.status(200).json(result);
   } catch (error) {
     res.status(500).json({ message: 'Error verifying phone', error });
+  }
+}
+
+async function exportTransactionsCSV(req: Request, res: Response) {
+  try {
+    const csv = await pay.exportTransactionsCSV({
+      userId: req.body.userId,
+      currency: req.query.currency as string || 'USD'
+    });
+    
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="transactions-${new Date().toISOString().split('T')[0]}.csv"`);
+    res.send(csv);
+  } catch (error) {
+    res.status(500).json({ message: 'Error exporting transactions CSV', error });
   }
 }
 

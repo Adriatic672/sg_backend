@@ -17,6 +17,7 @@ class CronService {
         this.scheduleRepetitiveTasks();
         this.scheduleEveryThirtySeconds();
         this.scheduleExchangeRatesUpdate();
+        this.scheduleReliabilityScoreUpdate();
     }
 
 
@@ -123,6 +124,19 @@ class CronService {
     }
 
 
+
+    private scheduleReliabilityScoreUpdate() {
+        cron.schedule('0 3 * * *', async () => {
+            console.log('Running daily reliability score update...');
+            try {
+                await new Model().saveCronLg(`RELIABILITY_SCORE_UPDATE`);
+                const updated = await new Campaigns().calculateReliabilityScores();
+                console.log(`Reliability score update completed. ${updated} creators updated.`);
+            } catch (error) {
+                console.error('Error running reliability score update:', error);
+            }
+        });
+    }
 
 }
 

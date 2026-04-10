@@ -1112,6 +1112,74 @@ COALESCE(p.username, 'admin') AS username,
     return resp;
   }
 
+  async filterCreators(params: {
+    location?: string;
+    level_id?: string;
+    industry_id?: string;
+    min_rating?: string;
+    q?: string;
+    page?: string;
+    limit?: string;
+  }) {
+    const { location, level_id, industry_id, min_rating, q, page = '1', limit = '50' } = params;
+
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 50));
+    const offset = (pageNum - 1) * limitNum;
+
+    let where = `WHERE u.user_type = 'influencer'`;
+
+    if (location && location !== 'all') {
+      where += ` AND p.iso_code = '${location}'`;
+    }
+    if (level_id && level_id !== 'all') {
+      where += ` AND u.level_id = ${parseInt(level_id)}`;
+    }
+    if (min_rating) {
+      where += ` AND p.influencer_rating >= ${parseInt(min_rating)}`;
+    }
+    if (industry_id) {
+      where += ` AND JSON_CONTAINS(p.industry_ids, '${parseInt(industry_id)}')`;
+    }
+    if (q && q.trim().length >= 2) {
+      const safe = q.replace(/'/g, "''");
+      where += ` AND (p.first_name LIKE '%${safe}%' OR p.last_name LIKE '%${safe}%' OR p.username LIKE '%${safe}%')`;
+    }
+
+    const countResult: any = await this.callQuerySafe(`
+      SELECT COUNT(*) AS total
+      FROM users u
+      INNER JOIN users_profile p ON u.user_id = p.user_id
+      ${where}
+    `);
+    const total = countResult[0]?.total ?? 0;
+
+    const rows: any = await this.callQuerySafe(`
+      SELECT
+        p.user_id, p.username, p.first_name, p.last_name, p.profile_pic,
+        p.iso_code, p.influencer_rating, p.content_best_at, p.industry_ids,
+        p.gender, p.created_on,
+        u.email, u.level_id, u.is_social_verified,
+        l.level_name
+      FROM users u
+      INNER JOIN users_profile p ON u.user_id = p.user_id
+      LEFT JOIN levels l ON u.level_id = l.id
+      ${where}
+      ORDER BY p.influencer_rating DESC, p.created_on DESC
+      LIMIT ${limitNum} OFFSET ${offset}
+    `);
+
+    return this.makeResponse(200, 'success', {
+      creators: rows,
+      pagination: {
+        total,
+        page: pageNum,
+        limit: limitNum,
+        pages: Math.ceil(total / limitNum),
+      },
+    });
+  }
+
   async deleteSocialSiteUser(data: any) {
     const { user_id, site_id } = data;
     return await makerCheckerHelper.createRequest(

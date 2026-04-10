@@ -1339,23 +1339,68 @@ export default class Payments extends Model {
     }
   }
 
-  async deletePaymentMethod(payment_method_id: string, userId: string) {
+   async deletePaymentMethod(payment_method_id: string, userId: string) {
+     try {
+       if (!payment_method_id) {
+         return this.makeResponse(400, "Payment method ID is required");
+       }
+
+       const method: any = await this.callQuerySafe(`SELECT * FROM payment_methods WHERE payment_method_id='${payment_method_id}' `);
+
+       if (method.length == 0) {
+         return this.makeResponse(404, "Payment method not found");
+       }
+
+       await this.callQuerySafe(`DELETE FROM payment_methods WHERE user_id='${userId}' AND payment_method_id='${payment_method_id}'`);
+       return this.makeResponse(200, "Payment method deleted successfully");
+     } catch (error: any) {
+       console.error("Error deleting payment method:", error.message);
+       return this.makeResponse(500, "Error deleting payment method", { error: error.message });
+     }
+   }
+
+  async exportTransactionsCSV(data: any) {
     try {
-      if (!payment_method_id) {
-        return this.makeResponse(400, "Payment method ID is required");
+      const { userId, currency } = data;
+
+      const wallet_id = await this.getWalletInfoByUserId(userId, currency);
+      const transactions: any = await this.callQuerySafe(`
+        SELECT 
+          trans_id,
+          created_at,
+          narration,
+          amount,
+          currency,
+          status,
+          trans_type,
+          payment_method
+        FROM wl_transactions 
+        WHERE (dr_wallet_id='${wallet_id}' or cr_wallet_id='${wallet_id}') 
+          and status!='PENDING' 
+        ORDER BY id DESC
+      `);
+
+      const headers = ['Transaction ID', 'Date', 'Description', 'Amount', 'Currency', 'Status', 'Type', 'Payment Method'];
+      const csvRows = [headers.join(',')];
+
+      for (const tx of transactions) {
+        const row = [
+          tx.trans_id,
+          tx.created_at,
+          `"${tx.narration.replace(/"/g, '""')}"`,
+          tx.amount,
+          tx.currency,
+          tx.status,
+          tx.trans_type,
+          tx.payment_method || ''
+        ];
+        csvRows.push(row.join(','));
       }
 
-      const method: any = await this.callQuerySafe(`SELECT * FROM payment_methods WHERE payment_method_id='${payment_method_id}' `);
-
-      if (method.length == 0) {
-        return this.makeResponse(404, "Payment method not found");
-      }
-
-      await this.callQuerySafe(`DELETE FROM payment_methods WHERE user_id='${userId}' AND payment_method_id='${payment_method_id}'`);
-      return this.makeResponse(200, "Payment method deleted successfully");
+      return csvRows.join('\n');
     } catch (error: any) {
-      console.error("Error deleting payment method:", error.message);
-      return this.makeResponse(500, "Error deleting payment method", { error: error.message });
+      console.error("Error exporting transactions CSV:", error.message);
+      throw error;
     }
   }
 

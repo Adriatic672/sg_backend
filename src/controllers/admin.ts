@@ -96,7 +96,26 @@ router.post('/verifyEmail', verifyEmail);
 router.post('/forgot-password', forgotPassword);
 router.post('/reset-password', resetPasswordWithOTP);
 router.get('/getUsersByRegion', applyJWTConditionally, getUsersByRegion);
+router.get('/filterCreators', applyJWTConditionally, filterCreators);
 
+
+async function filterCreators(req: Request, res: Response) {
+  try {
+    const { location, level_id, industry_id, min_rating, q, page, limit } = req.query;
+    const result = await companyServices.filterCreators({
+      location: location as string,
+      level_id: level_id as string,
+      industry_id: industry_id as string,
+      min_rating: min_rating as string,
+      q: q as string,
+      page: page as string,
+      limit: limit as string,
+    });
+    res.status(200).json(result);
+  } catch (error) {
+    res.status(500).json({ message: 'Error filtering creators', error });
+  }
+}
 
 async function getUsersByRegion(req: Request, res: Response) {
   try {

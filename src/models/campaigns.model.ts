@@ -117,13 +117,15 @@ export default class Campaigns extends Model {
     //  AND application_status = 'submitted'
 
     const response: any = await this.callQuerySafe(`
-      SELECT campaign_id, i.user_id,influencer_rating,first_name,last_name,profile_pic,iso_code,payable_amount,invited_on,invite_status,application_status FROM act_campaign_invites i inner join users_profile up on i.user_id=up.user_id  
-      WHERE campaign_id = '${campaign_id}' 
-        AND invite_status = 'accepted' 
+      SELECT campaign_id, i.user_id, influencer_rating, first_name, last_name, profile_pic,
+             iso_code, payable_amount, invited_on, invite_status, application_status,
+             i.action_status, i.delay_flagged, i.delay_flagged_at
+      FROM act_campaign_invites i
+      INNER JOIN users_profile up ON i.user_id = up.user_id
+      WHERE campaign_id = '${campaign_id}'
+        AND invite_status = 'accepted'
         AND application_status != 'pending'
     `);
-
-
 
     return this.makeResponse(200, "success", response);
 
@@ -133,9 +135,13 @@ export default class Campaigns extends Model {
   async getApprovedInfluencers(campaign_id: any) {
     console.log("getApprovedInfluencers", campaign_id)
     const response: any = await this.callQuerySafe(`
-      SELECT campaign_id, i.user_id,influencer_rating,first_name,last_name,profile_pic,iso_code,payable_amount,invited_on,invite_status,application_status FROM act_campaign_invites i inner join users_profile up on i.user_id=up.user_id  
-      WHERE campaign_id = '${campaign_id}' 
-        AND invite_status = 'accepted' 
+      SELECT campaign_id, i.user_id, influencer_rating, first_name, last_name, profile_pic,
+             iso_code, payable_amount, invited_on, invite_status, application_status,
+             i.action_status, i.delay_flagged, i.delay_flagged_at
+      FROM act_campaign_invites i
+      INNER JOIN users_profile up ON i.user_id = up.user_id
+      WHERE campaign_id = '${campaign_id}'
+        AND invite_status = 'accepted'
         AND application_status = 'approved'
     `);
 
@@ -460,7 +466,9 @@ export default class Campaigns extends Model {
   async getCampaignStats(campaignId: string) {
     try {
       const response: any = await this.callQuerySafe(`
-        SELECT i.invite_status, i.action_status, i.application_status, c.budget, c.title, c.objective, c.start_date, c.end_date
+        SELECT i.invite_status, i.action_status, i.application_status,
+               i.delay_flagged,
+               c.budget, c.title, c.objective, c.start_date, c.end_date
         FROM act_campaign_invites i
         INNER JOIN act_campaigns c ON i.campaign_id = c.campaign_id
         WHERE i.campaign_id = '${campaignId}'`);
@@ -486,7 +494,7 @@ export default class Campaigns extends Model {
 
       let invited = response.length;
       let accepted = 0, rejected = 0, started = 0, completed = 0;
-      let submitted = 0, approved = 0, revisionRequired = 0;
+      let submitted = 0, approved = 0, revisionRequired = 0, delayed = 0;
 
       response.forEach((row: any) => {
         const status = row.invite_status.toLowerCase();
@@ -506,6 +514,7 @@ export default class Campaigns extends Model {
           case 'approved': approved++; break;
           case 'revision_required': revisionRequired++; break;
         }
+        if (row.delay_flagged) delayed++;
       });
 
       const pending = invited - (accepted + rejected);
@@ -529,6 +538,7 @@ export default class Campaigns extends Model {
         started,
         completed,
         droppedOut,
+        delayed,
       };
 
       return this.makeResponse(200, "success", campaignStats);
@@ -691,7 +701,9 @@ WHERE i.user_id = '${userId}' AND i.invite_status = '${status}' AND i.applicatio
         p.name AS brand_name, p.logo AS brand_logo,
         CASE WHEN c.status = 'open_to_applications' THEN 1 ELSE 0 END AS is_open,
         CASE WHEN i.invite_id IS NOT NULL THEN 1 ELSE 0 END AS is_invited,
-        i.invite_status, i.action_status
+        i.invite_status, i.action_status,
+        i.application_status,
+        i.delay_flagged, i.delay_flagged_at
       FROM act_campaigns c
       INNER JOIN business_profile p ON c.created_by = p.business_id
       LEFT JOIN act_campaign_invites i ON c.campaign_id = i.campaign_id AND i.user_id = '${userId}'
@@ -710,7 +722,8 @@ SELECT
   COALESCE(SUM(CASE WHEN i.application_status = 'submitted' THEN 1 ELSE 0 END), 0) AS count_submitted,
   COALESCE(SUM(CASE WHEN i.application_status = 'approved' THEN 1 ELSE 0 END), 0) AS count_approved,
   COALESCE(SUM(CASE WHEN i.application_status = 'revision_required' THEN 1 ELSE 0 END), 0) AS count_revision_required,
-  COALESCE(SUM(CASE WHEN i.action_status = 'completed' THEN 1 ELSE 0 END), 0) AS count_completed
+  COALESCE(SUM(CASE WHEN i.action_status = 'completed' THEN 1 ELSE 0 END), 0) AS count_completed,
+  COALESCE(SUM(CASE WHEN i.delay_flagged = 1 THEN 1 ELSE 0 END), 0) AS count_delayed
 FROM act_campaigns c 
 LEFT JOIN act_campaign_invites i ON c.campaign_id = i.campaign_id 
 WHERE c.created_by = '${userId}'  
@@ -842,7 +855,7 @@ WHERE campaign_id = '${campaign_id}'`);
 
   async calculateReliabilityScores() {
     try {
-      // Get all creators who have at least one completed campaign invite
+      // All creators who have at least one accepted campaign invite.
       const creators: any = await this.callQuerySafe(`
         SELECT DISTINCT i.user_id
         FROM act_campaign_invites i
@@ -850,6 +863,8 @@ WHERE campaign_id = '${campaign_id}'`);
       `);
 
       let updated = 0;
+      const now = this.getMySQLDateTime();
+
       for (const row of creators) {
         const userId = row.user_id;
 
@@ -859,6 +874,7 @@ WHERE campaign_id = '${campaign_id}'`);
             SUM(CASE WHEN i.action_status = 'completed' THEN 1 ELSE 0 END) AS completed,
             SUM(CASE WHEN i.application_status = 'approved' THEN 1 ELSE 0 END) AS approved,
             SUM(CASE WHEN i.application_status = 'revision_required' THEN 1 ELSE 0 END) AS revisions,
+            -- On-time: completed before the campaign end_date
             SUM(
               CASE
                 WHEN i.action_status = 'completed'
@@ -867,37 +883,58 @@ WHERE campaign_id = '${campaign_id}'`);
                   AND i.completed_at <= c.end_date
                 THEN 1 ELSE 0
               END
-            ) AS on_time
+            ) AS on_time,
+            -- Responsiveness: accepted within the original 24-hour invite window.
+            -- expiry_date is set to invite_time + 24h so it serves as the deadline proxy.
+            SUM(
+              CASE
+                WHEN i.action_date IS NOT NULL
+                  AND i.expiry_date IS NOT NULL
+                  AND i.action_date <= i.expiry_date
+                THEN 1 ELSE 0
+              END
+            ) AS responsive
           FROM act_campaign_invites i
           INNER JOIN act_campaigns c ON i.campaign_id = c.campaign_id
           WHERE i.user_id = '${userId}' AND i.invite_status = 'accepted'
         `);
 
         const s = stats[0];
-        const total = parseInt(s.total) || 0;
-        const completed = parseInt(s.completed) || 0;
-        const approved = parseInt(s.approved) || 0;
-        const revisions = parseInt(s.revisions) || 0;
-        const onTime = parseInt(s.on_time) || 0;
+        const total         = parseInt(s.total)      || 0;
+        const completed     = parseInt(s.completed)  || 0;
+        const approved      = parseInt(s.approved)   || 0;
+        const revisions     = parseInt(s.revisions)  || 0;
+        const onTime        = parseInt(s.on_time)    || 0;
+        const responsive    = parseInt(s.responsive) || 0;
 
         if (total === 0) continue;
 
-        // Completion rate (40%): how many accepted invites were completed
+        // Completion rate (35%): accepted invites that were completed.
         const completionRate = completed / total;
 
-        // Approval rate (35%): how many completed were approved vs needed revision
-        const reviewable = approved + revisions;
+        // Approval rate (30%): approved / (approved + revision_required).
+        const reviewable   = approved + revisions;
         const approvalRate = reviewable > 0 ? approved / reviewable : completionRate;
 
-        // On-time rate (25%): completed before campaign end_date
+        // On-time delivery (20%): completed before campaign end_date.
         const onTimeRate = completed > 0 ? onTime / completed : 0;
 
-        // Weighted score 0–5
-        const score = ((completionRate * 0.4) + (approvalRate * 0.35) + (onTimeRate * 0.25)) * 5;
+        // Responsiveness (15%): accepted within the 24-hour invite window.
+        const responsivenessRate = total > 0 ? responsive / total : 0;
+
+        // Weighted score 0–5 (stored in dedicated reliability_score column,
+        // NOT in influencer_rating which remains user-facing).
+        const score   = (
+          (completionRate    * 0.35) +
+          (approvalRate      * 0.30) +
+          (onTimeRate        * 0.20) +
+          (responsivenessRate * 0.15)
+        ) * 5;
         const rounded = Math.round(score * 10) / 10;
 
         await this.updateData(`users_profile`, `user_id = '${userId}'`, {
-          influencer_rating: rounded,
+          reliability_score:            rounded,
+          reliability_score_updated_at: now,
         });
         updated++;
       }
@@ -907,6 +944,107 @@ WHERE campaign_id = '${campaign_id}'`);
     } catch (error) {
       logger.error("calculateReliabilityScores error:", error);
       return 0;
+    }
+  }
+
+  /**
+   * Delay Monitoring
+   *
+   * Finds every accepted campaign invite where the campaign's end_date has
+   * passed but the creator has not yet completed their submission, and that
+   * invite has not already been flagged.
+   *
+   * For each hit it:
+   *   1. Marks the invite as delay_flagged so it won't fire again.
+   *   2. Sends an in-app / push notification to the creator.
+   *   3. Returns the list of overdue items for admin alerting (caller decides
+   *      how to surface this — the cron logs it; the admin endpoint exposes it).
+   *
+   * @returns { flagged: number, items: any[] }
+   */
+  async monitorCampaignDelays(): Promise<{ flagged: number; items: any[] }> {
+    try {
+      // Overdue = campaign ended AND creator hasn't completed AND not flagged yet.
+      // Include the campaign's created_by (brand user ID) so we can notify them.
+      const overdue: any = await this.callQuerySafe(`
+        SELECT
+          i.invite_id,
+          i.user_id,
+          i.campaign_id,
+          i.invite_status,
+          i.action_status,
+          i.application_status,
+          c.title        AS campaign_title,
+          c.end_date,
+          c.created_by   AS brand_user_id,
+          p.first_name,
+          p.last_name,
+          p.username
+        FROM act_campaign_invites i
+        INNER JOIN act_campaigns   c ON i.campaign_id = c.campaign_id
+        INNER JOIN users_profile   p ON i.user_id     = p.user_id
+        WHERE i.invite_status  = 'accepted'
+          AND i.action_status <> 'completed'
+          AND c.end_date       < NOW()
+          AND i.delay_flagged  = 0
+      `);
+
+      if (overdue.length === 0) {
+        logger.info('monitorCampaignDelays: no overdue invites found');
+        return { flagged: 0, items: [] };
+      }
+
+      const now = this.getMySQLDateTime();
+
+      // Track which brands have already been notified per campaign so we send
+      // at most one brand notification per campaign per cron run, not one per creator.
+      const notifiedBrands = new Set<string>();
+
+      for (const row of overdue) {
+        try {
+          // 1. Flag so the cron doesn't fire again.
+          await this.updateData(
+            'act_campaign_invites',
+            `invite_id = '${row.invite_id}'`,
+            { delay_flagged: 1, delay_flagged_at: now }
+          );
+
+          // 2. Notify the creator.
+          const creatorName = `${row.first_name} ${row.last_name}`.trim() || row.username;
+          this.sendAppNotification(
+            row.user_id,
+            'CAMPAIGN_DELAY_CREATOR',
+            creatorName,
+            '',
+            '',
+            row.campaign_title,
+            'CAMPAIGN'
+          );
+
+          // 3. Notify the brand owner once per campaign per run.
+          const brandKey = `${row.brand_user_id}:${row.campaign_id}`;
+          if (row.brand_user_id && !notifiedBrands.has(brandKey)) {
+            notifiedBrands.add(brandKey);
+            this.sendAppNotification(
+              row.brand_user_id,
+              'CAMPAIGN_DELAY_BRAND',
+              '',
+              '',
+              '',
+              row.campaign_title,
+              'CAMPAIGN'
+            );
+          }
+        } catch (innerErr) {
+          logger.error(`monitorCampaignDelays: error processing invite ${row.invite_id}`, innerErr);
+        }
+      }
+
+      logger.info(`monitorCampaignDelays: flagged ${overdue.length} overdue invites, notified ${notifiedBrands.size} brand(s)`);
+      return { flagged: overdue.length, items: overdue };
+    } catch (error) {
+      logger.error('monitorCampaignDelays error:', error);
+      return { flagged: 0, items: [] };
     }
   }
 

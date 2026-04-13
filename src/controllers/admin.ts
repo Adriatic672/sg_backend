@@ -98,16 +98,22 @@ router.post('/reset-password', resetPasswordWithOTP);
 router.get('/getUsersByRegion', applyJWTConditionally, getUsersByRegion);
 router.get('/filterCreators', applyJWTConditionally, filterCreators);
 router.get('/getJobs', applyJWTConditionally, getJobs);
+router.get('/delayedCampaigns', applyJWTConditionally, getDelayedCampaigns);
+router.get('/usdWithdrawals', applyJWTConditionally, getUsdWithdrawalRequests);
+router.post('/processUsdWithdrawal', applyJWTConditionally, processUsdWithdrawal);
+router.get('/financialDashboard', applyJWTConditionally, getFinancialDashboard);
+router.get('/communityFeed', applyJWTConditionally, getCommunityFeed);
 
 
 async function filterCreators(req: Request, res: Response) {
   try {
-    const { location, level_id, industry_id, min_rating, q, page, limit } = req.query;
+    const { location, level_id, industry_id, min_rating, min_reliability_score, q, page, limit } = req.query;
     const result = await companyServices.filterCreators({
       location: location as string,
       level_id: level_id as string,
       industry_id: industry_id as string,
       min_rating: min_rating as string,
+      min_reliability_score: min_reliability_score as string,
       q: q as string,
       page: page as string,
       limit: limit as string,
@@ -139,6 +145,67 @@ async function getUsersByRegion(req: Request, res: Response) {
     res.status(200).json(result);
   } catch (error) {
     res.status(500).json({ message: 'Error fetching users by region', error });
+  }
+}
+
+async function getDelayedCampaigns(req: Request, res: Response) {
+  try {
+    const { campaign_id, user_id, page, limit } = req.query;
+    const result = await companyServices.getDelayedCampaigns({
+      campaign_id: campaign_id as string,
+      user_id: user_id as string,
+      page: page as string,
+      limit: limit as string,
+    });
+    res.status(result.status).json(result);
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching delayed campaigns', error });
+  }
+}
+
+async function getUsdWithdrawalRequests(req: Request, res: Response) {
+  try {
+    const { status, page, limit } = req.query;
+    const result = await companyServices.getUsdWithdrawalRequests({
+      status: status as string,
+      page: page as string,
+      limit: limit as string,
+    });
+    res.status(result.status).json(result);
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching USD withdrawal requests', error });
+  }
+}
+
+async function processUsdWithdrawal(req: Request, res: Response) {
+  try {
+    const result = await companyServices.processUsdWithdrawal(req.body);
+    res.status(result.status).json(result);
+  } catch (error) {
+    res.status(500).json({ message: 'Error processing USD withdrawal', error });
+  }
+}
+
+async function getFinancialDashboard(req: Request, res: Response) {
+  try {
+    const result = await companyServices.getFinancialDashboard();
+    res.status(result.status).json(result);
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching financial dashboard', error });
+  }
+}
+
+async function getCommunityFeed(req: Request, res: Response) {
+  try {
+    const { page, limit } = req.query;
+    const Activities = require('../models/activities.model').default;
+    const result = await new Activities().getCommunityFeed({
+      page: page as string,
+      limit: limit as string,
+    });
+    res.status(result.status).json(result);
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching community feed', error });
   }
 }
 

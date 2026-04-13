@@ -750,6 +750,122 @@ class Activities extends Model {
     }
   }
 
+  /**
+   * Community Hub — unified feed.
+   *
+   * Aggregates four content types into a single ranked feed:
+   *   1. announcements  — approved news/announcements from admin (DynamoDB)
+   *   2. job_highlights — currently active job board posts (MySQL)
+   *   3. success_posts  — high-rated campaign reviews (MySQL, rating >= 4)
+   *   4. discussions    — recent user posts (DynamoDB)
+   *
+   * Each item in the feed carries a `type` discriminator so the frontend can
+   * render it with the correct card component.
+   */
+  async getCommunityFeed(params: { page?: string; limit?: string } = {}) {
+    try {
+      const pageNum  = Math.max(1, parseInt(params.page  || '1'));
+      const limitNum = Math.min(50,  Math.max(1, parseInt(params.limit || '20')));
+
+      // 1. Announcements — approved news items from DynamoDB
+      let announcements: any[] = [];
+      try {
+        const newsItems: any = await getItemByFields("ActivityNews", { status: "approved" });
+        announcements = (newsItems || [])
+          .sort((a: any, b: any) => new Date(b.created_at || b.published_at || 0).getTime()
+                                  - new Date(a.created_at || a.published_at || 0).getTime())
+          .slice(0, 5)
+          .map((n: any) => ({ type: 'announcement', ...n }));
+      } catch (e) {
+        logger.warn('getCommunityFeed: could not fetch announcements', e);
+      }
+
+      // 2. Job highlights — top 5 active jobs ordered by most recent
+      let jobHighlights: any[] = [];
+      try {
+        const jobs: any = await this.callQuerySafe(`
+          SELECT
+            j.job_id, j.title, j.description, j.comp_amount, j.comp_currency,
+            j.comp_type, j.niche, j.deadline, j.min_followers, j.created_at,
+            bp.name AS brand_name, bp.logo AS brand_logo
+          FROM jb_job_posts j
+          LEFT JOIN business_profile bp ON j.brand_id = bp.business_id
+          WHERE j.status = 'active' AND j.deadline >= CURDATE()
+          ORDER BY j.created_at DESC
+          LIMIT 5
+        `);
+        jobHighlights = (jobs || []).map((j: any) => ({ type: 'job_highlight', ...j }));
+      } catch (e) {
+        logger.warn('getCommunityFeed: could not fetch job highlights', e);
+      }
+
+      // 3. Campaign success posts — approved reviews with rating >= 4
+      let successPosts: any[] = [];
+      try {
+        const reviews: any = await this.callQuerySafe(`
+          SELECT
+            r.id, r.campaign_id, r.user_id, r.rating, r.review,
+            r.liked_aspects, r.improvement_areas, r.created_at,
+            p.username, p.first_name, p.last_name, p.profile_pic,
+            c.title AS campaign_title
+          FROM act_campaign_reviews r
+          INNER JOIN users_profile p ON r.user_id = p.user_id
+          INNER JOIN act_campaigns c ON r.campaign_id = c.campaign_id
+          WHERE r.rating >= 4
+          ORDER BY r.created_at DESC
+          LIMIT 5
+        `);
+        successPosts = (reviews || []).map((rv: any) => ({ type: 'success_post', ...rv }));
+      } catch (e) {
+        logger.warn('getCommunityFeed: could not fetch success posts', e);
+      }
+
+      // 4. Recent discussions — latest active posts from DynamoDB
+      let discussions: any[] = [];
+      try {
+        const posts: any = await getItemByFields("posts", { status: "active" });
+        discussions = (posts || [])
+          .sort((a: any, b: any) => new Date(b.created_at || 0).getTime()
+                                  - new Date(a.created_at || 0).getTime())
+          .slice(0, 10)
+          .map((p: any) => ({ type: 'discussion', ...p }));
+      } catch (e) {
+        logger.warn('getCommunityFeed: could not fetch discussions', e);
+      }
+
+      // Merge all sections, sort by created_at descending, then paginate.
+      const allItems = [...announcements, ...jobHighlights, ...successPosts, ...discussions]
+        .sort((a: any, b: any) => {
+          const ta = new Date(a.created_at || a.published_at || 0).getTime();
+          const tb = new Date(b.created_at || b.published_at || 0).getTime();
+          return tb - ta;
+        });
+
+      const total     = allItems.length;
+      const offset    = (pageNum - 1) * limitNum;
+      const feedItems = allItems.slice(offset, offset + limitNum);
+
+      return this.makeResponse(200, 'success', {
+        feed: feedItems,
+        sections: {
+          announcements:  announcements.length,
+          job_highlights: jobHighlights.length,
+          success_posts:  successPosts.length,
+          discussions:    discussions.length,
+        },
+        pagination: {
+          total,
+          page: pageNum,
+          limit: limitNum,
+          pages: Math.ceil(total / limitNum),
+        },
+      });
+    } catch (error) {
+      logger.error('getCommunityFeed error:', error);
+      return this.makeResponse(500, 'Error fetching community feed');
+    }
+  }
+
 }
 
 export default Activities;

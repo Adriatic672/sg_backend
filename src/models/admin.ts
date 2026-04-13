@@ -968,17 +968,134 @@ COALESCE(p.username, 'admin') AS username,
 
   async getWalletStats() {
     return await this.callQuerySafe(`
-      SELECT 
+      SELECT
 COALESCE(p.username, 'admin') AS username,
-        w.wallet_id, 
+        w.wallet_id,
         w.wallet_name,
-        w.balance, 
+        w.balance,
         w.asset
       FROM user_wallets w
       LEFT JOIN users_profile p ON w.user_id = p.user_id
         ORDER BY w.created_on
         LIMIT 3000
     `);
+  }
+
+  /**
+   * Single aggregated view of platform finances for the admin dashboard.
+   *
+   * Returns:
+   *  - escrow: current escrow wallet balance
+   *  - kes_liability / usd_liability: sum of all creator/brand wallet balances
+   *  - withdrawals: breakdown by status (pending, successful, failed) for KES and USD
+   *  - pending_usd_bank: count + sum of usd_withdrawal_requests awaiting admin action
+   *  - escrow_per_campaign: per-campaign breakdown of escrowed budget
+   */
+  async getFinancialDashboard() {
+    try {
+      const escrowWalletId = (process.env.ESCROW_WALLET && process.env.ESCROW_WALLET !== 'undefined')
+        ? process.env.ESCROW_WALLET
+        : 'ESCROW000000';
+
+      // 1. Escrow wallet balance
+      const escrowRow: any = await this.callQuerySafe(`
+        SELECT COALESCE(balance, 0) AS balance, asset
+        FROM user_wallets
+        WHERE wallet_id = '${escrowWalletId}'
+      `);
+      const escrow = escrowRow[0] || { balance: 0, asset: 'USD' };
+
+      // 2. KES & USD liability (sum of all non-admin user wallets)
+      const liabilityRows: any = await this.callQuerySafe(`
+        SELECT asset, COALESCE(SUM(balance), 0) AS total
+        FROM user_wallets
+        WHERE user_id != 'admin'
+          AND wallet_id != '${escrowWalletId}'
+        GROUP BY asset
+      `);
+      const liability: any = { KES: 0, USD: 0 };
+      liabilityRows.forEach((r: any) => { liability[r.asset] = parseFloat(r.total) || 0; });
+
+      // 3. Withdrawal breakdown — grouped by currency and system_status
+      const withdrawalRows: any = await this.callQuerySafe(`
+        SELECT
+          currency,
+          system_status,
+          COUNT(*)       AS count,
+          COALESCE(SUM(amount), 0) AS total
+        FROM wl_transactions
+        WHERE trans_type = 'DR'
+          AND system_status IN ('SUCCESS', 'FAILED', 'PROCESSING', 'PENDING_REVERSAL')
+        GROUP BY currency, system_status
+      `);
+
+      const withdrawals: any = {
+        KES: { pending: { count: 0, total: 0 }, successful: { count: 0, total: 0 }, failed: { count: 0, total: 0 } },
+        USD: { pending: { count: 0, total: 0 }, successful: { count: 0, total: 0 }, failed: { count: 0, total: 0 } },
+      };
+      withdrawalRows.forEach((r: any) => {
+        const cur = r.currency as string;
+        if (!withdrawals[cur]) withdrawals[cur] = { pending: { count: 0, total: 0 }, successful: { count: 0, total: 0 }, failed: { count: 0, total: 0 } };
+        const cnt = parseInt(r.count) || 0;
+        const tot = parseFloat(r.total) || 0;
+        if (['PROCESSING', 'PENDING_REVERSAL'].includes(r.system_status)) {
+          withdrawals[cur].pending.count += cnt;
+          withdrawals[cur].pending.total += tot;
+        } else if (r.system_status === 'SUCCESS') {
+          withdrawals[cur].successful.count += cnt;
+          withdrawals[cur].successful.total += tot;
+        } else {
+          withdrawals[cur].failed.count += cnt;
+          withdrawals[cur].failed.total += tot;
+        }
+      });
+
+      // 4. Pending USD bank withdrawal requests awaiting admin action
+      const usdBankRow: any = await this.callQuerySafe(`
+        SELECT COUNT(*) AS count, COALESCE(SUM(amount), 0) AS total
+        FROM usd_withdrawal_requests
+        WHERE status = 'PENDING'
+      `);
+      const pendingUsdBank = {
+        count: parseInt(usdBankRow[0]?.count) || 0,
+        total: parseFloat(usdBankRow[0]?.total) || 0,
+      };
+
+      // 5. Escrow per campaign.
+      // budget = what was locked into escrow when the campaign was activated.
+      // paid_out = what has already been released to creators (SUCCESS payments).
+      // remaining = budget − paid_out (still held in escrow for this campaign).
+      const escrowPerCampaign: any = await this.callQuerySafe(`
+        SELECT
+          c.campaign_id,
+          c.title,
+          c.status,
+          c.budget,
+          COALESCE(cpu.paid_out, 0)                    AS paid_out,
+          GREATEST(c.budget - COALESCE(cpu.paid_out, 0), 0) AS remaining_escrow
+        FROM act_campaigns c
+        LEFT JOIN (
+          SELECT campaign_id, SUM(amount_paid) AS paid_out
+          FROM campaign_payments_users
+          WHERE trans_status = 'SUCCESS'
+          GROUP BY campaign_id
+        ) cpu ON cpu.campaign_id = c.campaign_id
+        WHERE c.status IN ('active', 'open_to_applications', 'pending_funding')
+        ORDER BY c.created_at DESC
+        LIMIT 100
+      `);
+
+      return this.makeResponse(200, 'success', {
+        escrow,
+        liability,
+        withdrawals,
+        pending_usd_bank: pendingUsdBank,
+        escrow_per_campaign: escrowPerCampaign,
+      });
+    } catch (error) {
+      logger.error('getFinancialDashboard error:', error);
+      return this.makeResponse(500, 'Error fetching financial dashboard');
+    }
   }
 
   async getStats() {
@@ -1107,6 +1224,146 @@ COALESCE(p.username, 'admin') AS username,
     return await this.callQuerySafe(`SELECT * FROM user_wallets where user_id ='admin'`);
   }
 
+  // ---------------------------------------------------------------------------
+  // USD Withdrawal — admin approval queue
+  // ---------------------------------------------------------------------------
+
+  async getUsdWithdrawalRequests(params: {
+    status?: string;
+    page?: string;
+    limit?: string;
+  } = {}) {
+    const { status, page = '1', limit = '50' } = params;
+    const pageNum  = Math.max(1, parseInt(page)  || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 50));
+    const offset   = (pageNum - 1) * limitNum;
+
+    let where = `WHERE 1=1`;
+    if (status && ['PENDING','APPROVED','REJECTED','PAID'].includes(status.toUpperCase())) {
+      where += ` AND r.status = '${status.toUpperCase()}'`;
+    }
+
+    try {
+      const countResult: any = await this.callQuerySafe(`
+        SELECT COUNT(*) AS total FROM usd_withdrawal_requests r ${where}
+      `);
+      const total = countResult[0]?.total ?? 0;
+
+      const rows: any = await this.callQuerySafe(`
+        SELECT
+          r.*,
+          p.username, p.first_name, p.last_name, p.profile_pic
+        FROM usd_withdrawal_requests r
+        INNER JOIN users_profile p ON r.user_id = p.user_id
+        ${where}
+        ORDER BY r.created_at DESC
+        LIMIT ${limitNum} OFFSET ${offset}
+      `);
+
+      return this.makeResponse(200, 'success', {
+        requests: rows,
+        pagination: { total, page: pageNum, limit: limitNum, pages: Math.ceil(total / limitNum) },
+      });
+    } catch (error) {
+      logger.error('getUsdWithdrawalRequests error:', error);
+      return this.makeResponse(500, 'Error fetching USD withdrawal requests');
+    }
+  }
+
+  /**
+   * Approve or reject a pending USD withdrawal request.
+   *
+   * On APPROVED/PAID: updates the wallet transaction to SUCCESS, stores the
+   *   bank reference, and notifies the creator.
+   * On REJECTED: reverses the wallet debit (restores creator balance) and
+   *   notifies the creator.
+   */
+  async processUsdWithdrawal(data: any) {
+    const { request_id, action, reference, admin_notes, userId } = data;
+
+    if (!['APPROVED', 'REJECTED'].includes((action || '').toUpperCase())) {
+      return this.makeResponse(400, "action must be APPROVED or REJECTED");
+    }
+
+    try {
+      const rows: any = await this.callQuerySafe(`
+        SELECT * FROM usd_withdrawal_requests WHERE request_id = '${request_id}'
+      `);
+      if (rows.length === 0) {
+        return this.makeResponse(404, 'Withdrawal request not found');
+      }
+      const req = rows[0];
+      if (req.status !== 'PENDING') {
+        return this.makeResponse(400, `Request is already ${req.status}`);
+      }
+
+      const now = this.getMySQLDateTime();
+
+      if (action.toUpperCase() === 'APPROVED') {
+        // Mark the wallet transaction as SUCCESS (debit stands).
+        await this.callQuerySafe(`
+          UPDATE wl_transactions
+          SET status = 'SUCCESS', system_status = 'SUCCESS', message = 'Admin approved bank transfer'
+          WHERE trans_id = '${req.trans_id}'
+        `);
+        await this.updateData('usd_withdrawal_requests', `request_id = '${request_id}'`, {
+          status:       'PAID',
+          reference:    reference || '',
+          admin_notes:  admin_notes || '',
+          processed_by: userId,
+          processed_at: now,
+        });
+        this.sendAppNotification(req.user_id, 'USD_WITHDRAWAL_APPROVED', '', req.amount.toString(), '', reference || 'N/A', 'WALLET');
+        return this.makeResponse(200, 'Withdrawal approved and marked as PAID');
+
+      } else {
+        // Rejection: reverse the wallet debit using walletTransfer() so all
+        // balance fields (available_balance, total_earned, etc.) stay consistent.
+        const origTx: any = await this.callQuerySafe(`
+          SELECT * FROM wl_transactions WHERE trans_id = '${req.trans_id}' LIMIT 1
+        `);
+        if (origTx.length > 0) {
+          const tx           = origTx[0];
+          const reversalId   = `t${this.getRandomString()}`;
+          // Swap dr ↔ cr: the receiving side (cr) now funds the reversal back to creator (dr).
+          const reversalResult = await this.walletTransfer(
+            reversalId,
+            tx.user_id,
+            tx.dr_wallet_id,   // credit: creator's wallet gets the money back
+            'DEPOSIT',
+            parseFloat(tx.amount),
+            0,
+            tx.currency,
+            'USD withdrawal reversal — admin rejected',
+            tx.cr_wallet_id,   // debit: the counterparty wallet (escrow/admin)
+            reversalId,
+          );
+          if (reversalResult.status !== 200) {
+            logger.error('processUsdWithdrawal: reversal failed', reversalResult);
+            return this.makeResponse(500, 'Failed to reverse wallet debit. Please retry.');
+          }
+          // Mark original transaction as reversed.
+          await this.callQuerySafe(`
+            UPDATE wl_transactions
+            SET status = 'FAILED', system_status = 'REVERSED', message = 'Admin rejected — reversed'
+            WHERE trans_id = '${req.trans_id}'
+          `);
+        }
+        await this.updateData('usd_withdrawal_requests', `request_id = '${request_id}'`, {
+          status:       'REJECTED',
+          admin_notes:  admin_notes || '',
+          processed_by: userId,
+          processed_at: now,
+        });
+        this.sendAppNotification(req.user_id, 'USD_WITHDRAWAL_REJECTED', '', req.amount.toString(), '', admin_notes || 'No reason provided', 'WALLET');
+        return this.makeResponse(200, 'Withdrawal rejected and creator balance restored');
+      }
+    } catch (error) {
+      logger.error('processUsdWithdrawal error:', error);
+      return this.makeResponse(500, 'Error processing USD withdrawal');
+    }
+  }
+
   async getCampaignFees() {
     return await this.callQuerySafe(`SELECT * FROM act_campaign_fees ORDER BY id DESC`);
   }
@@ -1182,15 +1439,20 @@ COALESCE(p.username, 'admin') AS username,
     level_id?: string;
     industry_id?: string;
     min_rating?: string;
+    min_reliability_score?: string;
     q?: string;
     page?: string;
     limit?: string;
   }) {
-    const { location, level_id, industry_id, min_rating, q, page = '1', limit = '50' } = params;
+    const {
+      location, level_id, industry_id,
+      min_rating, min_reliability_score,
+      q, page = '1', limit = '50',
+    } = params;
 
-    const pageNum = Math.max(1, parseInt(page) || 1);
+    const pageNum  = Math.max(1, parseInt(page)  || 1);
     const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 50));
-    const offset = (pageNum - 1) * limitNum;
+    const offset   = (pageNum - 1) * limitNum;
 
     let where = `WHERE u.user_type = 'influencer'`;
 
@@ -1201,7 +1463,10 @@ COALESCE(p.username, 'admin') AS username,
       where += ` AND u.level_id = ${parseInt(level_id)}`;
     }
     if (min_rating) {
-      where += ` AND p.influencer_rating >= ${parseInt(min_rating)}`;
+      where += ` AND p.influencer_rating >= ${parseFloat(min_rating)}`;
+    }
+    if (min_reliability_score) {
+      where += ` AND p.reliability_score >= ${parseFloat(min_reliability_score)}`;
     }
     if (industry_id) {
       where += ` AND JSON_CONTAINS(p.industry_ids, '${parseInt(industry_id)}')`;
@@ -1222,7 +1487,9 @@ COALESCE(p.username, 'admin') AS username,
     const rows: any = await this.callQuerySafe(`
       SELECT
         p.user_id, p.username, p.first_name, p.last_name, p.profile_pic,
-        p.iso_code, p.influencer_rating, p.content_best_at, p.industry_ids,
+        p.iso_code, p.influencer_rating,
+        p.reliability_score, p.reliability_score_updated_at,
+        p.content_best_at, p.industry_ids,
         p.gender, p.created_on,
         u.email, u.level_id, u.is_social_verified,
         l.level_name
@@ -1230,7 +1497,7 @@ COALESCE(p.username, 'admin') AS username,
       INNER JOIN users_profile p ON u.user_id = p.user_id
       LEFT JOIN levels l ON u.level_id = l.id
       ${where}
-      ORDER BY p.influencer_rating DESC, p.created_on DESC
+      ORDER BY p.reliability_score DESC, p.influencer_rating DESC, p.created_on DESC
       LIMIT ${limitNum} OFFSET ${offset}
     `);
 
@@ -1317,6 +1584,74 @@ COALESCE(p.username, 'admin') AS username,
         { id: 9, name: 'Business & Finance', description: 'Business, finance, and entrepreneurship' },
         { id: 10, name: 'Lifestyle', description: 'General lifestyle and personal development' }
       ];
+    }
+  }
+
+  /**
+   * Returns all campaign invites that have been flagged as overdue by the
+   * delay-monitoring cron, with creator and campaign details attached.
+   * Supports optional filtering by campaign_id or creator user_id.
+   */
+  async getDelayedCampaigns(params: {
+    campaign_id?: string;
+    user_id?: string;
+    page?: string;
+    limit?: string;
+  } = {}) {
+    const { campaign_id, user_id, page = '1', limit = '50' } = params;
+    const pageNum  = Math.max(1, parseInt(page)  || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 50));
+    const offset   = (pageNum - 1) * limitNum;
+
+    let where = `WHERE i.delay_flagged = 1`;
+    if (campaign_id) where += ` AND i.campaign_id = '${campaign_id}'`;
+    if (user_id)     where += ` AND i.user_id = '${user_id}'`;
+
+    try {
+      const countResult: any = await this.callQuerySafe(`
+        SELECT COUNT(*) AS total
+        FROM act_campaign_invites i
+        ${where}
+      `);
+      const total = countResult[0]?.total ?? 0;
+
+      const rows: any = await this.callQuerySafe(`
+        SELECT
+          i.invite_id,
+          i.campaign_id,
+          i.user_id,
+          i.invite_status,
+          i.action_status,
+          i.application_status,
+          i.delay_flagged_at,
+          c.title          AS campaign_title,
+          c.end_date,
+          c.status         AS campaign_status,
+          p.username,
+          p.first_name,
+          p.last_name,
+          p.profile_pic,
+          p.reliability_score
+        FROM act_campaign_invites i
+        INNER JOIN act_campaigns c ON i.campaign_id = c.campaign_id
+        INNER JOIN users_profile p ON i.user_id     = p.user_id
+        ${where}
+        ORDER BY i.delay_flagged_at DESC
+        LIMIT ${limitNum} OFFSET ${offset}
+      `);
+
+      return this.makeResponse(200, 'success', {
+        delays: rows,
+        pagination: {
+          total,
+          page: pageNum,
+          limit: limitNum,
+          pages: Math.ceil(total / limitNum),
+        },
+      });
+    } catch (error) {
+      logger.error('getDelayedCampaigns error:', error);
+      return this.makeResponse(500, 'Error fetching delayed campaigns');
     }
   }
 

@@ -18,6 +18,7 @@ class CronService {
         this.scheduleEveryThirtySeconds();
         this.scheduleExchangeRatesUpdate();
         this.scheduleReliabilityScoreUpdate();
+        this.scheduleDelayMonitoring();
     }
 
 
@@ -134,6 +135,33 @@ class CronService {
                 console.log(`Reliability score update completed. ${updated} creators updated.`);
             } catch (error) {
                 console.error('Error running reliability score update:', error);
+            }
+        });
+    }
+
+    /**
+     * Runs every 6 hours.
+     * Finds accepted campaign invites whose campaign end_date has passed but
+     * the creator has not submitted.  Flags each invite once and sends the
+     * creator a push/email notification.  Admin can query flagged items via
+     * GET /admin/delayedCampaigns.
+     */
+    private scheduleDelayMonitoring() {
+        cron.schedule('0 */6 * * *', async () => {
+            console.log('Running campaign delay monitoring...');
+            try {
+                await new Model().saveCronLg(`CAMPAIGN_DELAY_MONITORING`);
+                const { flagged, items } = await new Campaigns().monitorCampaignDelays();
+                if (flagged > 0) {
+                    console.log(`Campaign delay monitoring: ${flagged} overdue invite(s) flagged.`);
+                    items.forEach((item: any) => {
+                        console.log(`  [DELAY] campaign="${item.campaign_title}" creator="${item.username}" end_date="${item.end_date}"`);
+                    });
+                } else {
+                    console.log('Campaign delay monitoring: no overdue invites.');
+                }
+            } catch (error) {
+                console.error('Error running campaign delay monitoring:', error);
             }
         });
     }

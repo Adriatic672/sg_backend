@@ -1038,6 +1038,29 @@ export default class Payments extends Model {
         return transferObj
       }
 
+      // USD bank transfers: create a pending admin-approval record here where
+      // the full `data` object (bank_name, account_name, swift_code) is in scope.
+      // The wallet debit above already happened; we hold it in PROCESSING until
+      // admin manually processes and marks it PAID.
+      if (paymentType.toUpperCase() === 'BANK') {
+        const requestId = `uw${this.getRandomString()}`;
+        await this.insertData('usd_withdrawal_requests', {
+          request_id:     requestId,
+          user_id:        userId,
+          trans_id:       refId,
+          amount,
+          currency:       payout_currency,
+          account_number,
+          account_name:   data.account_name  || '',
+          bank_name:      data.bank_name     || '',
+          swift_code:     data.swift_code    || '',
+          status:         'PENDING',
+        });
+        await this.updateTransactionStatus(refId, 'Awaiting admin processing', 'PROCESSING', 'PROCESSING');
+        this.sendAppNotification(userId, 'USD_WITHDRAWAL_SUBMITTED', '', amount.toString(), '', '', 'WALLET');
+        return this.makeResponse(200, 'Your USD withdrawal request has been submitted. Admin will process it manually and notify you.');
+      }
+
       if (process.env.ENVIRONMENT != 'production') {
         return transferObj
       }
@@ -1110,6 +1133,8 @@ export default class Payments extends Model {
         statusCode = thirdpartyPayResponse.status
         message = thirdpartyPayResponse.message
       } else {
+        // BANK is handled earlier in transferRequest() before this method is called.
+        // Any other method reaching here is unsupported.
         await this.updateTransactionStatus(refId, message, "FAILED", "PENDING_REVERSAL");
         return this.makeResponse(400, "Invalid payment method for " + payout_currency);
       }

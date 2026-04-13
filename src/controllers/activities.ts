@@ -31,9 +31,23 @@ router.post('/completedVideo', applyJWTConditionally, completedVideo);
 router.post('/cacheNews', applyAdminJWTConditionally, cacheNews);
 router.post('/deleteCampaignTask', applyJWTConditionally, deleteCampaignTask);
 router.post('/updateCampaignTask', applyJWTConditionally, updateCampaignTask);
+router.get('/communityFeed', applyJWTConditionally, communityFeed);
 
 
 
+
+async function communityFeed(req: Request, res: Response) {
+  try {
+    const { page, limit } = req.query;
+    const result = await activity.getCommunityFeed({
+      page:  page  as string,
+      limit: limit as string,
+    });
+    res.status(result.status).json(result);
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching community feed', error });
+  }
+}
 
 async function deleteCampaignTask(req: Request, res: Response) {
   try {

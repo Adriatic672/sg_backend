@@ -1,0 +1,1 @@
+ALTER TABLE `cron_log` MODIFY `id` int NOT NULL AUTO_INCREMENT;

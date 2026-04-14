@@ -979,6 +979,13 @@ export default class Payments extends Model {
 
       if (paymentType == "WALLET" && account_number.length > 4) {
         crWalletId = account_number
+      } else if (paymentType === 'BANK' && account_number) {
+        // One-off bank withdrawal — account details come directly in the request body
+        account_name = data.account_name || '';
+        const supportedCurrency = await this.supportedCurrency(payout_currency);
+        if (!supportedCurrency) {
+          return this.makeResponse(400, "Payout is not supported for " + payout_currency);
+        }
       } else {
 
         const supportedCurrency = await this.supportedCurrency(payout_currency);
@@ -1429,6 +1436,24 @@ export default class Payments extends Model {
     }
   }
 
+
+  async getMyUsdWithdrawals(userId: string) {
+    try {
+      if (!userId) {
+        return this.makeResponse(400, 'User ID is required');
+      }
+      const rows: any = await this.callQuerySafe(
+        `SELECT request_id, amount, currency, account_number, account_name, bank_name, swift_code, status, created_at
+         FROM usd_withdrawal_requests
+         WHERE user_id = '${userId}'
+         ORDER BY created_at DESC`
+      );
+      return this.makeResponse(200, 'ok', rows);
+    } catch (error: any) {
+      console.error('getMyUsdWithdrawals error:', error.message);
+      return this.makeResponse(500, 'Error fetching USD withdrawal history');
+    }
+  }
 
   async getUserPaymentMethod(paymentMethod: string, type: string, userId: string) {
     // return await this.callQuerySafe(`SELECT * FROM payment_methods WHERE payment_method_id='${paymentMethod}' and type='${type}' AND user_id='${userId}'`);

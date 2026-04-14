@@ -46,6 +46,7 @@ router.post('/resetTransactionPin', applyJWTConditionally, resetTransactionPin);
 router.post('/getExchangeRate', applyJWTConditionally, getExchangeRate);
 router.get('/getTransactionById/:id', getTransactionById);
 router.get('/exportTransactions', applyJWTConditionally, exportTransactionsCSV);
+router.get('/myUsdWithdrawals', applyJWTConditionally, getMyUsdWithdrawals);
  router.post('/pinlogin', applyJWTConditionally, async (req: Request, res: Response) => {
   try {
     const result = await pay.login(req.body);
@@ -251,6 +252,15 @@ async function InitPayment(req: Request, res: Response) {
     res.status(200).json(result);
   } catch (error) {
     res.status(500).json({ message: 'Error verifying phone', error });
+  }
+}
+
+async function getMyUsdWithdrawals(req: Request, res: Response) {
+  try {
+    const result = await pay.getMyUsdWithdrawals(req.body.userId);
+    res.status(200).json(result);
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching USD withdrawal history', error });
   }
 }
 

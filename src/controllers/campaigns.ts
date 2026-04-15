@@ -68,6 +68,7 @@ router.get('/accepted', applyBrandJWTConditionally, getAcceptedUsers);
 router.get('/influencer-applications', applyJWTConditionally, getInfluencerApplications);
 router.post('/submit-application', applyJWTConditionally, submitApplication);
 router.post('/activate', applyBrandJWTConditionally, activateCampaign);
+router.post('/prefund', applyBrandJWTConditionally, prefundCampaign);
 router.post('/batch-process-applications', applyBrandJWTConditionally, batchProcessApplications);
 router.get('/proposed-influencers/:id', applyJWTConditionally, proposedInfluencers);
 router.post('/filterInfluencers', applyJWTConditionally, filterInfluencers);
@@ -497,6 +498,15 @@ async function handleCampaignInvite(req: Request, res: Response) {
   } catch (error) {
     console.error("Error in handleCampaignInvite:", error);
     res.status(500).json({ message: 'Error handling campaign invite', error });
+  }
+}
+
+async function prefundCampaign(req: Request, res: Response) {
+  try {
+    const result = await campaigns.prefundCampaign(req.body);
+    res.status(200).json(result);
+  } catch (error) {
+    res.status(500).json({ message: 'Error prefunding campaign', error });
   }
 }
 

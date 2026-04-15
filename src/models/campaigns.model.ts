@@ -172,6 +172,63 @@ export default class Campaigns extends Model {
   }
 
 
+  async prefundCampaign(data: any) {
+    const { campaign_id, userId } = data;
+    try {
+      const campaigns: any = await this.callQuerySafe(
+        `SELECT * FROM act_campaigns WHERE campaign_id = '${campaign_id}'`
+      );
+      if (campaigns.length === 0) {
+        return this.makeResponse(404, 'Campaign not found');
+      }
+      const campaign = campaigns[0];
+
+      if (campaign.created_by_user_id !== userId) {
+        return this.makeResponse(403, 'You do not own this campaign');
+      }
+
+      if (campaign.funding_status === 'funded') {
+        return this.makeResponse(200, 'Campaign is already funded');
+      }
+
+      const budget = parseFloat(campaign.budget || '0');
+      if (budget <= 0) {
+        return this.makeResponse(400, 'Campaign budget must be set before funding. Please set a budget first.');
+      }
+
+      const wallet_id = await this.getWalletInfoByUserId(userId, 'USD');
+      if (!wallet_id) {
+        return this.makeResponse(404, 'USD wallet not found. Please set up your wallet first.');
+      }
+
+      const escrowWallet: string = (process.env.ESCROW_WALLET && process.env.ESCROW_WALLET !== 'undefined')
+        ? process.env.ESCROW_WALLET
+        : 'ESCROW000000';
+
+      const trans_id = `pf${this.getRandomString()}`;
+      const transferResult = await this.walletTransfer(
+        trans_id, userId, escrowWallet, 'ESCROW', budget, 0, 'USD',
+        `Campaign prefunding: ${campaign.title}`, wallet_id, campaign_id
+      );
+
+      if (transferResult.status !== 200) {
+        return transferResult;
+      }
+
+      await this.updateData('act_campaigns', `campaign_id = '${campaign_id}'`, {
+        funding_status: 'funded',
+        funded_amount: budget,
+      });
+
+      this.sendAppNotification(userId, 'CAMPAIGN_FUNDED', '', budget.toString(), '', '', 'CAMPAIGN');
+      logger.info('prefundCampaign success', { campaign_id, budget });
+      return this.makeResponse(200, `Campaign funded with $${budget}. It is now ready to be activated.`);
+    } catch (error: any) {
+      logger.error('prefundCampaign error:', error);
+      return this.makeResponse(500, 'Error prefunding campaign');
+    }
+  }
+
   async activateCampaign(data: any) {
     const { campaign_id, userId } = data;
 
@@ -187,6 +244,10 @@ export default class Campaigns extends Model {
 
     if ( campaignData.status != 'open_to_applications') {
       return this.makeResponse(400, `Campaign is in a ${campaignData.status} status, can't be activated`);
+    }
+
+    if (campaignData.funding_status !== 'funded') {
+      return this.makeResponse(400, "Campaign must be funded before activation. Please deposit the campaign budget first.");
     }
 
 
@@ -1504,7 +1565,7 @@ WHERE campaign_id = '${campaign_id}'`);
 
       const published_date = new Date().toISOString().slice(0, 19).replace('T', ' ')
 
-      const budgetUpdate = { status: "open_to_applications", budget: budget, published_date: published_date };
+      const budgetUpdate = { status: "open_to_applications", budget: budget, published_date: published_date, funding_status: 'funded', funded_amount: budget };
       await this.updateData("act_campaigns", `campaign_id = '${campaign_id}'`, budgetUpdate);
 
       this.commitTransaction();
@@ -1659,7 +1720,7 @@ WHERE campaign_id = '${campaign_id}'`);
       const budget = amountToPay;
       console.log("budget", budget)
 
-      const budgetUpdate = { status: "open_to_applications", published_date: published_date };
+      const budgetUpdate = { status: "open_to_applications", published_date: published_date, funding_status: 'funded', funded_amount: amountToPay };
       await this.updateData("act_campaigns", `campaign_id = '${campaign_id}'`, budgetUpdate);
 
       this.commitTransaction();

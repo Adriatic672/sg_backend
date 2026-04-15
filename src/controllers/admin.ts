@@ -10,6 +10,25 @@ const applyJWTConditionally = (req: Request, res: Response, next: any) => {
   JWTMiddleware.verifyToken(req, res, next);
 };
 
+// Only super_admin can access certain routes
+const requireSuperAdmin = (req: Request, res: Response, next: any) => {
+  const role = (req as any).body?.role || (req as any).user?.role;
+  if (role !== 'super_admin' && role !== 'SUPER_ADMIN') {
+    return res.status(403).json({ status: 403, message: 'Super admin access required' });
+  }
+  next();
+};
+
+// Campaign manager OR super_admin
+const requireManagerOrAdmin = (req: Request, res: Response, next: any) => {
+  const role = (req as any).body?.role || (req as any).user?.role;
+  const allowed = ['super_admin', 'SUPER_ADMIN', 'campaign_manager', 'admin', 'ADMIN'];
+  if (!allowed.includes(role)) {
+    return res.status(403).json({ status: 403, message: 'Insufficient permissions' });
+  }
+  next();
+};
+
 router.post('/login', login);
 router.get('/viewUsers', applyJWTConditionally, viewUsers);
 router.get('/viewBrands', applyJWTConditionally, viewBrands);
@@ -66,6 +85,7 @@ router.get('/deleteVideo/:id', applyJWTConditionally, deleteVideo);
 router.post('/adminRegister', applyJWTConditionally, addAdminUser);
 router.post('/deactivateAdminUser', applyJWTConditionally, deactivateAdminUser);
 router.post('/reactivateAdminUser', applyJWTConditionally, reactivateAdminUser);
+router.put('/adminUsers/:id', applyJWTConditionally, requireSuperAdmin, updateAdminUser);
 router.post('/resetPassword', applyJWTConditionally, resetPassword);
 router.post('/changePassword', applyJWTConditionally, changePassword);
 router.post('/sendNotification', applyJWTConditionally, sendNotification);
@@ -103,6 +123,15 @@ router.get('/usdWithdrawals', applyJWTConditionally, getUsdWithdrawalRequests);
 router.post('/processUsdWithdrawal', applyJWTConditionally, processUsdWithdrawal);
 router.get('/financialDashboard', applyJWTConditionally, getFinancialDashboard);
 router.get('/communityFeed', applyJWTConditionally, getCommunityFeed);
+
+// ─── Campaign Manager Routes ─────────────────────────────────────────────────
+router.get('/campaignManagers', applyJWTConditionally, requireSuperAdmin, getCampaignManagers);
+router.get('/campaignManagers/:adminId/assignments', applyJWTConditionally, requireSuperAdmin, getManagerAssignmentsById);
+router.post('/assignCampaign', applyJWTConditionally, requireSuperAdmin, assignCampaignToManager);
+router.delete('/assignCampaign', applyJWTConditionally, requireSuperAdmin, unassignCampaignFromManager);
+router.get('/myCampaigns', applyJWTConditionally, requireManagerOrAdmin, getMyCampaigns);
+router.get('/myCampaignStats', applyJWTConditionally, requireManagerOrAdmin, getMyCampaignStats);
+router.get('/myCampaignApplicants/:campaignId', applyJWTConditionally, requireManagerOrAdmin, getMyCampaignApplicants);
 
 
 async function filterCreators(req: Request, res: Response) {
@@ -492,6 +521,15 @@ async function resetPassword(req: Request, res: Response) {
     res.status(500).json({ message: 'Error resetting password', error });
   }
 }
+async function updateAdminUser(req: Request, res: Response) {
+  try {
+    const result = await companyServices.updateAdminUser(req.params.id, req.body);
+    res.status(result.status).json(result);
+  } catch (error) {
+    res.status(500).json({ status: 500, message: 'Error updating admin user' });
+  }
+}
+
 async function deactivateAdminUser(req: Request, res: Response) {
   try {
     const result = await companyServices.deactivateAdminUser(req.body.id);
@@ -1228,6 +1266,76 @@ async function getReferralAnalytics(req: Request, res: Response) {
     res.status(result.status).json(result);
   } catch (error) {
     res.status(500).json({ message: 'Error getting referral analytics', error });
+  }
+}
+
+// ─── Campaign Manager Handlers ────────────────────────────────────────────────
+
+async function getManagerAssignmentsById(req: Request, res: Response) {
+  try {
+    const result = await companyServices.getManagerAssignments(req.params.adminId);
+    res.status(result.status).json(result);
+  } catch (error) {
+    res.status(500).json({ status: 500, message: 'Error getting assignments' });
+  }
+}
+
+async function getCampaignManagers(req: Request, res: Response) {
+  try {
+    const result = await companyServices.getCampaignManagers();
+    res.status(result.status).json(result);
+  } catch (error) {
+    res.status(500).json({ status: 500, message: 'Error getting campaign managers' });
+  }
+}
+
+async function assignCampaignToManager(req: Request, res: Response) {
+  try {
+    const { admin_id, campaign_id } = req.body;
+    if (!admin_id || !campaign_id) return res.status(400).json({ status: 400, message: 'admin_id and campaign_id required' });
+    const result = await companyServices.assignCampaign(admin_id, campaign_id, req.body.userId);
+    res.status(result.status).json(result);
+  } catch (error) {
+    res.status(500).json({ status: 500, message: 'Error assigning campaign' });
+  }
+}
+
+async function unassignCampaignFromManager(req: Request, res: Response) {
+  try {
+    const { admin_id, campaign_id } = req.body;
+    if (!admin_id || !campaign_id) return res.status(400).json({ status: 400, message: 'admin_id and campaign_id required' });
+    const result = await companyServices.unassignCampaign(admin_id, campaign_id);
+    res.status(result.status).json(result);
+  } catch (error) {
+    res.status(500).json({ status: 500, message: 'Error unassigning campaign' });
+  }
+}
+
+async function getMyCampaigns(req: Request, res: Response) {
+  try {
+    const result = await companyServices.getManagerAssignments(req.body.userId);
+    res.status(result.status).json(result);
+  } catch (error) {
+    res.status(500).json({ status: 500, message: 'Error getting campaigns' });
+  }
+}
+
+async function getMyCampaignStats(req: Request, res: Response) {
+  try {
+    const result = await companyServices.getCampaignManagerStats(req.body.userId);
+    res.status(result.status).json(result);
+  } catch (error) {
+    res.status(500).json({ status: 500, message: 'Error getting stats' });
+  }
+}
+
+async function getMyCampaignApplicants(req: Request, res: Response) {
+  try {
+    const { campaignId } = req.params;
+    const result = await companyServices.getCampaignApplicants(campaignId, req.body.userId);
+    res.status(result.status).json(result);
+  } catch (error) {
+    res.status(500).json({ status: 500, message: 'Error getting applicants' });
   }
 }
 

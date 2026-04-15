@@ -503,7 +503,7 @@ async function handleCampaignInvite(req: Request, res: Response) {
 
 async function prefundCampaign(req: Request, res: Response) {
   try {
-    const result = await campaigns.prefundCampaign(req.body);
+    const result = await campaign.prefundCampaign(req.body);
     res.status(200).json(result);
   } catch (error) {
     res.status(500).json({ message: 'Error prefunding campaign', error });

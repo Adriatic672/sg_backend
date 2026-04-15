@@ -299,6 +299,30 @@ class Admin extends Model {
   async getObjectives() {
     return await this.callQuerySafe("SELECT * FROM objectives ORDER BY created_at DESC");
   }
+  async updateAdminUser(adminId: string, data: any) {
+    try {
+      const admin: any = await this.callQuerySafe(
+        `SELECT user_id FROM admin_users WHERE user_id = ?`, [adminId]
+      );
+      if (!admin.length) return this.makeResponse(404, 'Admin user not found');
+
+      const allowedRoles = ['READ', 'WRITE', 'ADMIN', 'SUPER_ADMIN', 'campaign_manager'];
+      const updates: any = {};
+      if (data.first_name) updates.first_name = data.first_name;
+      if (data.last_name)  updates.last_name  = data.last_name;
+      if (data.country)    updates.country    = data.country;
+      if (data.role && allowedRoles.includes(data.role)) updates.role = data.role;
+
+      if (!Object.keys(updates).length) return this.makeResponse(400, 'No valid fields to update');
+
+      await this.updateData('admin_users', `user_id='${adminId}'`, updates);
+      return this.makeResponse(200, 'Admin user updated successfully');
+    } catch (error) {
+      logger.error('Error in updateAdminUser:', error);
+      return this.makeResponse(500, 'Error updating admin user');
+    }
+  }
+
   async deactivateAdminUser(adminId: string) {
     try {
       // Check if admin exists and is active
@@ -535,6 +559,9 @@ class Admin extends Model {
       const password = this.generateRandomPassword();
 
       const hashedPassword = this.hashPassword(password);
+      const allowedRoles = ['READ', 'WRITE', 'ADMIN', 'SUPER_ADMIN', 'campaign_manager'];
+      const role = allowedRoles.includes(data.role) ? data.role : 'READ';
+
       const newAdminUser = {
         user_id: this.getRandomString(),
         first_name,
@@ -542,6 +569,7 @@ class Admin extends Model {
         country: data.country,
         email,
         password: hashedPassword,
+        role,
         user_type: "admin",
         status: 'active',
         created_by: data.userId,
@@ -2766,6 +2794,140 @@ COALESCE(p.username, 'admin') AS username,
       'UPDATE admin_users SET password = ? WHERE user_id = ?',
       [newHash, userId]
     );
+  }
+
+  // ─── Campaign Manager Assignment ────────────────────────────────────────────
+
+  async getCampaignManagers() {
+    try {
+      const managers: any = await this.callQuerySafe(
+        `SELECT user_id, first_name, last_name, email, status, created_at FROM admin_users WHERE role = 'campaign_manager' ORDER BY first_name`
+      );
+      return this.makeResponse(200, 'Campaign managers retrieved', managers);
+    } catch (error) {
+      logger.error('getCampaignManagers error', error);
+      return this.makeResponse(500, 'Error retrieving campaign managers');
+    }
+  }
+
+  async assignCampaign(adminId: string, campaignId: string, assignedBy: string) {
+    try {
+      const manager: any = await this.callQuerySafe(
+        `SELECT user_id FROM admin_users WHERE user_id = ? AND role = 'campaign_manager' AND status = 'active'`,
+        [adminId]
+      );
+      if (!manager.length) return this.makeResponse(404, 'Campaign manager not found');
+
+      const campaign: any = await this.callQuerySafe(
+        `SELECT campaign_id, title FROM act_campaigns WHERE campaign_id = ?`,
+        [campaignId]
+      );
+      if (!campaign.length) return this.makeResponse(404, 'Campaign not found');
+
+      await this.callQuerySafe(
+        `INSERT IGNORE INTO admin_campaign_assignments (admin_id, campaign_id, assigned_by) VALUES (?, ?, ?)`,
+        [adminId, campaignId, assignedBy]
+      );
+      return this.makeResponse(200, 'Campaign assigned successfully');
+    } catch (error) {
+      logger.error('assignCampaign error', error);
+      return this.makeResponse(500, 'Error assigning campaign');
+    }
+  }
+
+  async unassignCampaign(adminId: string, campaignId: string) {
+    try {
+      await this.callQuerySafe(
+        `DELETE FROM admin_campaign_assignments WHERE admin_id = ? AND campaign_id = ?`,
+        [adminId, campaignId]
+      );
+      return this.makeResponse(200, 'Campaign unassigned successfully');
+    } catch (error) {
+      logger.error('unassignCampaign error', error);
+      return this.makeResponse(500, 'Error unassigning campaign');
+    }
+  }
+
+  async getManagerAssignments(adminId: string) {
+    try {
+      const rows: any = await this.callQuerySafe(
+        `SELECT a.campaign_id, c.title, c.status, c.start_date, c.end_date, c.budget,
+                a.assigned_at,
+                (SELECT COUNT(*) FROM act_campaign_invites WHERE campaign_id = c.campaign_id) AS count_invited,
+                (SELECT COUNT(*) FROM act_campaign_invites WHERE campaign_id = c.campaign_id AND invite_status = 'accepted') AS count_accepted,
+                (SELECT COUNT(*) FROM act_campaign_invites WHERE campaign_id = c.campaign_id AND action_status = 'submitted') AS count_submitted,
+                (SELECT COUNT(*) FROM act_campaign_invites WHERE campaign_id = c.campaign_id AND action_status = 'approved') AS count_approved,
+                (SELECT COUNT(*) FROM act_campaign_invites WHERE campaign_id = c.campaign_id AND action_status = 'completed') AS count_completed
+         FROM admin_campaign_assignments a
+         JOIN act_campaigns c ON c.campaign_id = a.campaign_id
+         WHERE a.admin_id = ?
+         ORDER BY a.assigned_at DESC`,
+        [adminId]
+      );
+      return this.makeResponse(200, 'Assignments retrieved', rows);
+    } catch (error) {
+      logger.error('getManagerAssignments error', error);
+      return this.makeResponse(500, 'Error retrieving assignments');
+    }
+  }
+
+  async getCampaignManagerStats(adminId: string) {
+    try {
+      const totals: any = await this.callQuerySafe(
+        `SELECT
+           COUNT(DISTINCT a.campaign_id) AS total_campaigns,
+           SUM(CASE WHEN c.status = 'active' OR c.status = 'open_to_applications' THEN 1 ELSE 0 END) AS active_campaigns,
+           SUM(CASE WHEN c.status = 'completed' THEN 1 ELSE 0 END) AS completed_campaigns,
+           COALESCE(SUM(
+             (SELECT COUNT(*) FROM act_campaign_invites i WHERE i.campaign_id = c.campaign_id)
+           ), 0) AS total_applicants,
+           COALESCE(SUM(
+             (SELECT COUNT(*) FROM act_campaign_invites i WHERE i.campaign_id = c.campaign_id AND i.invite_status = 'accepted')
+           ), 0) AS total_accepted,
+           COALESCE(SUM(
+             (SELECT COUNT(*) FROM act_campaign_invites i WHERE i.campaign_id = c.campaign_id AND i.action_status = 'submitted')
+           ), 0) AS total_submitted,
+           COALESCE(SUM(
+             (SELECT COUNT(*) FROM act_campaign_invites i WHERE i.campaign_id = c.campaign_id AND i.action_status = 'approved')
+           ), 0) AS total_approved,
+           COALESCE(SUM(
+             (SELECT COUNT(*) FROM act_campaign_invites i WHERE i.campaign_id = c.campaign_id AND i.action_status = 'completed')
+           ), 0) AS total_completed
+         FROM admin_campaign_assignments a
+         JOIN act_campaigns c ON c.campaign_id = a.campaign_id
+         WHERE a.admin_id = ?`,
+        [adminId]
+      );
+      return this.makeResponse(200, 'Stats retrieved', totals[0] || {});
+    } catch (error) {
+      logger.error('getCampaignManagerStats error', error);
+      return this.makeResponse(500, 'Error retrieving stats');
+    }
+  }
+
+  async getCampaignApplicants(campaignId: string, adminId: string) {
+    try {
+      // verify manager is assigned to this campaign
+      const check: any = await this.callQuerySafe(
+        `SELECT id FROM admin_campaign_assignments WHERE admin_id = ? AND campaign_id = ?`,
+        [adminId, campaignId]
+      );
+      if (!check.length) return this.makeResponse(403, 'Not assigned to this campaign');
+
+      const rows: any = await this.callQuerySafe(
+        `SELECT i.invite_id, i.user_id, i.invite_status, i.action_status, i.invited_on, i.action_date,
+                u.first_name, u.last_name, u.email, u.profile_pic
+         FROM act_campaign_invites i
+         JOIN users u ON u.user_id = i.user_id
+         WHERE i.campaign_id = ?
+         ORDER BY i.invited_on DESC`,
+        [campaignId]
+      );
+      return this.makeResponse(200, 'Applicants retrieved', rows);
+    } catch (error) {
+      logger.error('getCampaignApplicants error', error);
+      return this.makeResponse(500, 'Error retrieving applicants');
+    }
   }
 
 }

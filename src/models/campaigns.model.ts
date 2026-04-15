@@ -196,7 +196,11 @@ export default class Campaigns extends Model {
         return this.makeResponse(400, 'Campaign budget must be set before funding. Please set a budget first.');
       }
 
-      const wallet_id = await this.getWalletInfoByUserId(userId, 'USD');
+      const walletRows: any = await this.callQuerySafe(
+        `SELECT wallet_id FROM wallets WHERE user_id = ? AND currency = 'USD' LIMIT 1`,
+        [userId]
+      );
+      const wallet_id = walletRows?.[0]?.wallet_id;
       if (!wallet_id) {
         return this.makeResponse(404, 'USD wallet not found. Please set up your wallet first.');
       }

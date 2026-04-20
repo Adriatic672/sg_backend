@@ -83,7 +83,7 @@ body { font-family: Arial; display: flex; justify-content: center; align-items: 
 <body>
 <div class="container">
 <div class="spinner"></div>
-<p>Completing Facebook login...</p>
+<p>Completing login...</p>
 </div>
 <script>
 console.log('Redirecting to app with code...');

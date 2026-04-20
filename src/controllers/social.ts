@@ -48,11 +48,11 @@ body { font-family: Arial; display: flex; justify-content: center; align-items: 
 <body>
 <div class="container">
 <div class="spinner"></div>
-<p>Connecting to Facebook...</p>
+<p>Connecting your account...</p>
 </div>
 <script>
 setTimeout(function() {
-window.location.href = 'socialgems://app.socialgems.me/oauth2redirect?error=${encodeURIComponent(error as string)}';
+window.location.href = '${process.env.APP_DEEP_LINK || 'socialgems://app.socialgems.me'}/oauth2redirect?error=${encodeURIComponent(error as string)}';
 }, 500);
 </script>
 </body>
@@ -87,7 +87,7 @@ body { font-family: Arial; display: flex; justify-content: center; align-items: 
 </div>
 <script>
 console.log('Redirecting to app with code...');
-window.location.href = 'socialgems://app.socialgems.me/oauth2redirect?code=${code}&state=${state}';
+window.location.href = '${process.env.APP_DEEP_LINK || 'socialgems://app.socialgems.me'}/oauth2redirect?code=${code}&state=${state}';
 </script>
 </body>
 </html>
@@ -101,7 +101,7 @@ window.location.href = 'socialgems://app.socialgems.me/oauth2redirect?code=${cod
 <body>
 <p>Error: ${error.message}</p>
 <script>
-window.location.href = 'socialgems://app.socialgems.me/oauth2redirect?error=${encodeURIComponent(error.message)}';
+window.location.href = '${process.env.APP_DEEP_LINK || 'socialgems://app.socialgems.me'}/oauth2redirect?error=${encodeURIComponent(error.message)}';
 </script>
 </body>
 </html>

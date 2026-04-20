@@ -46,7 +46,7 @@ export default class SocialModel extends Model {
             revokeUrl: 'https://open.tiktokapis.com/v2/oauth/revoke/',
             clientKey: process.env.TIKTOK_CLIENT_ID || process.env.TIKTOK_CLIENT_KEY || "",
             clientSecret: process.env.TIKTOK_CLIENT_SECRET || process.env.TIKTOK_SECRET || "",
-            redirectUri: process.env.TIKTOK_REDIRECT_URI || process.env.REDIRECT_URI || "https://app.socialgems.me/oauth2redirect",
+            redirectUri: process.env.TIKTOK_REDIRECT_URI || process.env.REDIRECT_URI || "https://sg-backend-0cs6.onrender.com/oauth/oauth2redirect",
         });
 
         this.platforms.set('x', {

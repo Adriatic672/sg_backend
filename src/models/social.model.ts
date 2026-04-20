@@ -259,16 +259,18 @@ export default class SocialModel extends Model {
             const scopes = ['tweet.read', 'users.read', 'offline.access'];
 
             const state = this.generateState();
+            const { codeVerifier, codeChallenge } = this.genPkcePair();
 
-            // X OAuth 2.0 with simple state (no PKCE for now)
-            await this.saveOAuthState('x', state, userId, '');
+            await this.saveOAuthState('x', state, userId, codeVerifier);
 
             const url =
                 `${config.authUrl}?client_id=${config.clientKey}` +
                 `&response_type=code` +
                 `&scope=${encodeURIComponent(scopes.join(' '))}` +
                 `&redirect_uri=${encodeURIComponent(config.redirectUri)}` +
-                `&state=${encodeURIComponent(state)}`;
+                `&state=${encodeURIComponent(state)}` +
+                `&code_challenge=${encodeURIComponent(codeChallenge)}` +
+                `&code_challenge_method=S256`;
 
             return this.makeResponse(200, "success", { authUrl: url });
         } catch (error) {

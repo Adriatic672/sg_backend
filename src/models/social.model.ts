@@ -641,8 +641,12 @@ export default class SocialModel extends Model {
             grant_type: "authorization_code",
             code,
             redirect_uri: config.redirectUri,
-            code_verifier: rec?.codeVerifier || '',
         };
+        
+        // Only include code_verifier if it exists (not empty)
+        if (rec?.codeVerifier && rec.codeVerifier.trim() !== '') {
+            bodyData.code_verifier = rec.codeVerifier;
+        }
 
         // Only add client_secret if it's configured (for confidential clients)
         if (config.clientSecret && config.clientSecret.trim() !== '') {

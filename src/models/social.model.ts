@@ -631,7 +631,8 @@ export default class SocialModel extends Model {
             clientKey: config.clientKey ? 'Set' : 'Missing',
             clientSecret: config.clientSecret ? 'Set' : 'Missing',
             code: code ? 'Set' : 'Missing',
-            redirectUri: config.redirectUri
+            redirectUri: config.redirectUri,
+            codeVerifier: rec?.codeVerifier ? 'Present' : 'Missing'
         });
 
         // Build body - only include client_secret if it exists
@@ -640,6 +641,7 @@ export default class SocialModel extends Model {
             grant_type: "authorization_code",
             code,
             redirect_uri: config.redirectUri,
+            code_verifier: rec?.codeVerifier || '',
         };
 
         // Only add client_secret if it's configured (for confidential clients)

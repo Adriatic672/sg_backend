@@ -625,28 +625,16 @@ export default class SocialModel extends Model {
     private async exchangeXTokens(code: string, state: string): Promise<SocialTokens> {
         const config = this.platforms.get('x')!;
         const rec = await this.loadAndDeleteOAuthState('x', state);
-        //  if (!rec) throw new Error("Invalid or expired state");
+        if (!rec) throw new Error("Invalid or expired OAuth state");
+        if (!rec.codeVerifier) throw new Error("Missing code_verifier in OAuth state record");
 
-        console.log('X OAuth Debug:', {
-            clientKey: config.clientKey ? 'Set' : 'Missing',
-            clientSecret: config.clientSecret ? 'Set' : 'Missing',
-            code: code ? 'Set' : 'Missing',
-            redirectUri: config.redirectUri,
-            codeVerifier: rec?.codeVerifier ? 'Present' : 'Missing'
-        });
-
-        // Build body - only include client_secret if it exists
         const bodyData: any = {
             client_id: config.clientKey,
             grant_type: "authorization_code",
             code,
             redirect_uri: config.redirectUri,
+            code_verifier: rec.codeVerifier,
         };
-        
-        // Only include code_verifier if it exists (not empty)
-        if (rec?.codeVerifier && rec.codeVerifier.trim() !== '') {
-            bodyData.code_verifier = rec.codeVerifier;
-        }
 
         // Only add client_secret if it's configured (for confidential clients)
         if (config.clientSecret && config.clientSecret.trim() !== '') {

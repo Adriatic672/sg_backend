@@ -174,7 +174,7 @@ export default class SocialModel extends Model {
             postdata.site_name = token.site_name || body.site_name;
         } else {
             postdata.token = token;
-            postdata.userId = body.user_id; // Add camelCase version
+            postdata.userId = body.userId || body.user_id;
             postdata.site_id = body.site_id;
             postdata.site_name = body.site_name;
         }

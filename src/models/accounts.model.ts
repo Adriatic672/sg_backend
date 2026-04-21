@@ -220,7 +220,8 @@ class Accounts extends Model {
   async socialSignOn(data: any) {
     try {
       console.log("SOS_REQUEST", data);
-      const { token, userId, site_name, site_id, email } = data;
+      const { token, userId, site_id, email } = data;
+      const site_name = data.site_name === 'x' ? 'X' : data.site_name;
       if (!token || !userId || !site_name) {
         return this.makeResponse(400, "Missing required fields: token or userId or site_name");
       }

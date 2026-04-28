@@ -555,6 +555,8 @@ export default class SocialModel extends Model {
         );
 
         if (result.length === 0) return null;
+        
+        console.log('OAuth State DB Response:', JSON.stringify(result[0]));
 
         // delete this in the future
         //  await this.deleteData("oauth_states", `platform='${platform}' AND state='${state}'`);

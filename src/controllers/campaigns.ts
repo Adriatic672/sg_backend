@@ -41,6 +41,7 @@ router.post('/payout', applyJWTConditionally, payout);
 
 // Influencer actions
 router.get('/explore', applyJWTConditionally, exploreCampaigns);
+router.post('/affiliate-click', applyJWTConditionally, trackAffiliateClick);
 router.get('/userCampaigns', applyJWTConditionally, getMyCampaigns);
 router.get('/campaign/:id', applyJWTConditionally, getCampaignById);
 router.get('/getCampaignTasks/:id', applyJWTConditionally, getCampaignTasks);
@@ -451,11 +452,23 @@ async function receivedInvites(req: Request, res: Response) {
 
 async function exploreCampaigns(req: Request, res: Response) {
   try {
-    const result = await campaign.exploreCampaigns(req.body.userId);
+    const earningType = req.query.earningType as string | undefined;
+    const result = await campaign.exploreCampaigns(req.body.userId, earningType);
     res.status(200).json(result);
   } catch (error) {
     console.error("Error in exploreCampaigns:", error);
     res.status(500).json({ message: 'Error retrieving campaigns', error });
+  }
+}
+
+async function trackAffiliateClick(req: Request, res: Response) {
+  try {
+    const { campaignId, userId } = req.body;
+    if (!campaignId) return res.status(400).json({ message: 'campaignId required' });
+    const result = await campaign.trackAffiliateClick(campaignId, userId);
+    res.status(200).json(result);
+  } catch (error) {
+    res.status(500).json({ message: 'Error tracking click', error });
   }
 }
 

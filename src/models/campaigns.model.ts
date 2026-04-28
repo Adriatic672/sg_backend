@@ -756,13 +756,15 @@ WHERE i.user_id = '${userId}' AND i.invite_status = '${status}' AND i.applicatio
     return this.makeResponse(200, "success", response);
   }
 
-  async exploreCampaigns(userId: string) {
-    // Returns all visible campaigns with invite status for this user
+  async exploreCampaigns(userId: string, earningType?: string) {
+    const earningFilter = earningType
+      ? `AND c.earning_type = '${earningType}'`
+      : '';
     const response = await this.callQuerySafe(`
       SELECT
         c.campaign_id, c.title, c.description, c.objective, c.image_urls,
         c.start_date, c.end_date, c.status, c.budget, c.number_of_influencers,
-        c.earning_type,
+        c.earning_type, c.affiliate_link,
         p.name AS brand_name, p.logo AS brand_logo,
         CASE WHEN c.status = 'open_to_applications' THEN 1 ELSE 0 END AS is_open,
         CASE WHEN i.invite_id IS NOT NULL THEN 1 ELSE 0 END AS is_invited,
@@ -773,9 +775,18 @@ WHERE i.user_id = '${userId}' AND i.invite_status = '${status}' AND i.applicatio
       INNER JOIN business_profile p ON c.created_by = p.business_id
       LEFT JOIN act_campaign_invites i ON c.campaign_id = i.campaign_id AND i.user_id = '${userId}'
       WHERE c.status IN ('active', 'open_to_applications')
+      ${earningFilter}
       ORDER BY c.created_on DESC
     `);
     return this.makeResponse(200, "success", response);
+  }
+
+  async trackAffiliateClick(campaignId: string, userId: string) {
+    await this.insertData(
+      'INSERT INTO affiliate_clicks (campaign_id, user_id) VALUES (?, ?)',
+      [campaignId, userId]
+    );
+    return this.makeResponse(200, "success", { message: "Click tracked" });
   }
 
   async getMyCreatedCampaigns(userId: string) {
@@ -1920,7 +1931,7 @@ WHERE campaign_id = '${campaign_id}'`);
 
       logger.info(`createCampaign`, data)
       console.log("createCampaignByUser", data)
-      const { title, role, userId, agentId, staffId, campaign_image, number_of_influencers, description, objective, requestId, start_date, end_date, budget, tasks, earning_type } = data;
+      const { title, role, userId, agentId, staffId, campaign_image, number_of_influencers, description, objective, requestId, start_date, end_date, budget, tasks, earning_type, affiliate_link } = data;
       const campaign_id = "cp" + this.getRandomString();
 
       if (!tasks || tasks.length === 0) {
@@ -2060,7 +2071,7 @@ WHERE campaign_id = '${campaign_id}'`);
         return this.makeResponse(400, "A campaign with the same title has already been posted within the last 3 minutes.");
       }
 
-      const newCampaign = {
+      const newCampaign: any = {
         campaign_id,
         request_id: requestId,
         title,
@@ -2078,6 +2089,7 @@ WHERE campaign_id = '${campaign_id}'`);
         creator_type: creator_type,
         created_by: finalBusinessId
       };
+      if (affiliate_link) newCampaign.affiliate_link = affiliate_link;
 
       this.beginTransaction()
       await this.insertData("act_campaigns", newCampaign);
@@ -2164,7 +2176,7 @@ WHERE campaign_id = '${campaign_id}'`);
   async updateCampaign(data: any) {
     try {
       logger.info(`updateCampaign`, data)
-      const { title, userId, campaign_image, number_of_influencers, description, objective, requestId, start_date, end_date, budget, tasks, campaign_id } = data;
+      const { title, userId, campaign_image, number_of_influencers, description, objective, requestId, start_date, end_date, budget, tasks, campaign_id, affiliate_link } = data;
 
       if (!tasks || tasks.length === 0) {
         return this.makeResponse(400, "You need at least one task.");
@@ -2252,7 +2264,7 @@ WHERE campaign_id = '${campaign_id}'`);
         return this.makeResponse(400, "A campaign with the same title has already been posted within the last 3 minutes.");
       }
 
-      const updatedCampaign = {
+      const updatedCampaign: any = {
         title,
         description,
         start_date,
@@ -2262,6 +2274,7 @@ WHERE campaign_id = '${campaign_id}'`);
         budget,
         number_of_influencers
       };
+      if (affiliate_link !== undefined) updatedCampaign.affiliate_link = affiliate_link;
 
       this.beginTransaction()
       const result = await this.updateData("act_campaigns", `campaign_id = '${campaign_id}'`, updatedCampaign);

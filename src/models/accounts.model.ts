@@ -511,30 +511,20 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
         return this.makeResponse(400, "Invalid Access Token or email mismatch");
       }
 
-      if (action == "register") {
-        // Check if the user exists
-        let userExists: any = await this.getUserByEmail(email);
-        if (userExists.length > 0) {
-          return this.makeResponse(400, "User already exists, please login");
-        }
-        if (!userExists || userExists.length === 0) {
-          return await this.signup({
-            firstName: userInfo.given_name || "",
-            lastName: userInfo.family_name || "",
-            password: this.getRandomString(),
-            user_type: "influencer",
-            email: userInfo.email,
-            picture: userInfo.picture || "",
-
-          });
-        }
+      const userExists: any = await this.getUserByEmail(email);
+      if (userExists.length > 0) {
+        // User exists — log them in
+        return await this.successLogin(userExists[0]);
       } else {
-        const userExists: any = await this.getUserByEmail(email);
-        if (userExists.length === 0) {
-          return this.makeResponse(400, "User not found, please register first");
-        }
-        const user = userExists[0];
-        return await this.successLogin(user);
+        // New user — auto-register then log in
+        return await this.signup({
+          firstName: userInfo.given_name || "",
+          lastName: userInfo.family_name || "",
+          password: this.getRandomString(),
+          user_type: "influencer",
+          email: userInfo.email,
+          picture: userInfo.picture || "",
+        });
       }
     } catch (error: any) {
       console.error("Error during Google Sign-On:", error.message || error);

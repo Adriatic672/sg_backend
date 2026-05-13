@@ -2,8 +2,9 @@ import express, { Request, Response } from 'express';
 import Campaigns from '../models/campaigns.model';
 import { JWTMiddleware } from '../helpers/jwt.middleware';
 import expressFileUpload from 'express-fileupload';
-
 import { JWTMiddlewareAdmin } from '../helpers/jwt.middleware.admin';
+import { validate } from '../helpers/validate';
+import { approveSubmissionSchema, cancelCampaignSchema, requestRevisionSchema } from '../helpers/validators/financial.validators';
 
 const router = express.Router();
 const campaign = new Campaigns();
@@ -27,8 +28,10 @@ router.patch('/edit', applyBrandJWTConditionally, updateCampaign);
 router.post('/deleteCampaign', applyBrandJWTConditionally, deleteCampaign);
 router.post('/inviteUsers', applyBrandJWTConditionally, inviteUsers);
 router.post('/agentInviteUsers', applyBrandJWTConditionally, agentInviteUsers);
-router.post('/reject-submission', applyBrandJWTConditionally, rejectSubmission);
-router.post('/request-revision', applyBrandJWTConditionally, requestRevision);
+router.post('/reject-submission',  applyBrandJWTConditionally, rejectSubmission);
+router.post('/request-revision',   applyBrandJWTConditionally, validate(requestRevisionSchema),  requestRevision);
+router.post('/approve-submission', applyBrandJWTConditionally, validate(approveSubmissionSchema), approveSubmission);
+router.post('/cancel',             applyBrandJWTConditionally, validate(cancelCampaignSchema),    cancelCampaign);
 
 
 
@@ -108,6 +111,32 @@ async function requestRevision(req: Request, res: Response) {
     res.status(200).json(result);
   } catch (error) {
     res.status(500).json({ message: 'Error requesting revision', error });
+  }
+}
+
+async function approveSubmission(req: Request, res: Response) {
+  try {
+    const { campaign_id, user_id } = req.body;
+    if (!campaign_id || !user_id) {
+      return res.status(400).json({ message: 'campaign_id and user_id are required' });
+    }
+    const brandUserId = (req as any).user?.userId || (req as any).user?.user_id;
+    const result = await campaign.approveSubmission({ ...req.body, brandUserId });
+    res.status(result.status).json(result);
+  } catch (error) {
+    res.status(500).json({ message: 'Error approving submission', error });
+  }
+}
+
+async function cancelCampaign(req: Request, res: Response) {
+  try {
+    const userId = (req as any).user?.userId || (req as any).user?.user_id;
+    const { campaign_id, reason } = req.body;
+    if (!campaign_id) return res.status(400).json({ message: 'campaign_id is required' });
+    const result = await campaign.cancelCampaign({ campaign_id, userId, reason });
+    res.status(result.status).json(result);
+  } catch (error) {
+    res.status(500).json({ message: 'Error cancelling campaign', error });
   }
 }
 

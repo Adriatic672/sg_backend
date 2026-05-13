@@ -29,10 +29,14 @@ if (!redisUrl) {
   });
 }
 
-const setItem = async (key: string, value: string): Promise<void> => {
+const setItem = async (key: string, value: string, ttlSeconds?: number): Promise<void> => {
   if (!redisReady || !redisClient) return;
   try {
-    await redisClient.set(key, value);
+    if (ttlSeconds) {
+      await redisClient.set(key, value, { EX: ttlSeconds });
+    } else {
+      await redisClient.set(key, value);
+    }
   } catch (err: any) {
     console.error(`[Redis] Error setting key "${key}":`, err.message);
   }

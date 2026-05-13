@@ -8,6 +8,7 @@ import Groups from "./groups.model";
 import Stellar from "../helpers/Stellar";
 import * as StellarSdk from 'stellar-sdk';
 import { UserStellarService } from '../helpers/UserStellarService';
+import EscrowModel from './escrow.model';
 
 const applicationStatus = ['pending', 'accepted', 'rejected'];
 
@@ -173,12 +174,17 @@ export default class Campaigns extends Model {
 
 
   async prefundCampaign(data: any) {
-    const { campaign_id, userId } = data;
+    const { campaign_id, userId, payment_reference } = data;
     try {
       const campaigns: any = await this.callQuerySafe(
-        `SELECT * FROM act_campaigns WHERE campaign_id = '${campaign_id}'`
+        `SELECT c.*, cpc.currency AS campaign_currency
+         FROM act_campaigns c
+         LEFT JOIN campaign_payment_config cpc ON cpc.campaign_id = c.campaign_id
+         WHERE c.campaign_id = ?
+         LIMIT 1`,
+        [campaign_id]
       );
-      if (campaigns.length === 0) {
+      if (!campaigns || campaigns.length === 0) {
         return this.makeResponse(404, 'Campaign not found');
       }
       const campaign = campaigns[0];
@@ -196,13 +202,16 @@ export default class Campaigns extends Model {
         return this.makeResponse(400, 'Campaign budget must be set before funding. Please set a budget first.');
       }
 
+      const currency: 'KES' | 'USD' = campaign.campaign_currency === 'USD' ? 'USD' : 'KES';
+      const asset = currency; // user_wallets.asset matches currency code
+
       const walletRows: any = await this.callQuerySafe(
-        `SELECT wallet_id FROM wallets WHERE user_id = ? AND currency = 'USD' LIMIT 1`,
-        [userId]
+        `SELECT wallet_id FROM user_wallets WHERE user_id = ? AND asset = ? AND status = 'active' LIMIT 1`,
+        [userId, asset]
       );
       const wallet_id = walletRows?.[0]?.wallet_id;
       if (!wallet_id) {
-        return this.makeResponse(404, 'USD wallet not found. Please set up your wallet first.');
+        return this.makeResponse(404, `${currency} wallet not found. Please set up your wallet first.`);
       }
 
       const escrowWallet: string = (process.env.ESCROW_WALLET && process.env.ESCROW_WALLET !== 'undefined')
@@ -211,7 +220,7 @@ export default class Campaigns extends Model {
 
       const trans_id = `pf${this.getRandomString()}`;
       const transferResult = await this.walletTransfer(
-        trans_id, userId, escrowWallet, 'ESCROW', budget, 0, 'USD',
+        trans_id, userId, escrowWallet, 'ESCROW', budget, 0, currency,
         `Campaign prefunding: ${campaign.title}`, wallet_id, campaign_id
       );
 
@@ -219,14 +228,32 @@ export default class Campaigns extends Model {
         return transferResult;
       }
 
+      // Create the escrow record (snapshotting platform fee at current setting).
+      const escrowModel = new EscrowModel();
+      const escrowResult = await escrowModel.createEscrowRecord({
+        campaign_id,
+        brand_user_id: userId,
+        currency,
+        total_amount: budget,
+        payment_reference: payment_reference || trans_id,
+      });
+
       await this.updateData('act_campaigns', `campaign_id = '${campaign_id}'`, {
         funding_status: 'funded',
         funded_amount: budget,
       });
 
       this.sendAppNotification(userId, 'CAMPAIGN_FUNDED', '', budget.toString(), '', '', 'CAMPAIGN');
-      logger.info('prefundCampaign success', { campaign_id, budget });
-      return this.makeResponse(200, `Campaign funded with $${budget}. It is now ready to be activated.`);
+      logger.info('prefundCampaign success', { campaign_id, budget, currency, escrow_id: escrowResult.escrow_id });
+
+      return this.makeResponse(200, `Campaign funded with ${currency} ${budget}. It is now ready to be activated.`, {
+        escrow_id: escrowResult.escrow_id,
+        total_amount: budget,
+        platform_fee_pct: escrowResult.fee_pct,
+        platform_fee_amt: escrowResult.platform_fee_amt,
+        creator_pool: escrowResult.creator_pool,
+        currency,
+      });
     } catch (error: any) {
       logger.error('prefundCampaign error:', error);
       return this.makeResponse(500, 'Error prefunding campaign');
@@ -491,6 +518,101 @@ export default class Campaigns extends Model {
     }
   }
 
+  async approveSubmission(data: any) {
+    const { campaign_id, user_id, brandUserId } = data;
+    try {
+      // Verify brand owns this campaign.
+      const ownership: any = await this.callQuerySafe(
+        `SELECT campaign_id, title, budget FROM act_campaigns
+         WHERE campaign_id = ? AND created_by_user_id = ? LIMIT 1`,
+        [campaign_id, brandUserId]
+      );
+      if (!ownership || ownership.length === 0) {
+        return this.makeResponse(403, 'Campaign not found or you do not own it');
+      }
+
+      // The invite must be in a completed state and not yet paid.
+      const invite: any = await this.callQuerySafe(
+        `SELECT id, invite_id, payable_amount, fee, pay_status
+         FROM act_campaign_invites
+         WHERE campaign_id = ? AND user_id = ?
+           AND action_status = 'completed' AND pay_status != 'paid'
+         LIMIT 1`,
+        [campaign_id, user_id]
+      );
+      if (!invite || invite.length === 0) {
+        return this.makeResponse(404, 'No completed unpaid submission found for this creator');
+      }
+
+      const row = invite[0];
+      const gross = parseFloat(row.payable_amount) || 0;
+      const fee   = parseFloat(row.fee) || 0;
+      const net   = parseFloat((gross - fee).toFixed(2));
+
+      // Get campaign currency from payment config.
+      const cpcRows: any = await this.callQuerySafe(
+        `SELECT currency FROM campaign_payment_config WHERE campaign_id = ? LIMIT 1`,
+        [campaign_id]
+      );
+      const currency = cpcRows?.[0]?.currency || 'KES';
+
+      // Upsert a campaign_payment_config row for this creator.
+      const existing: any = await this.callQuerySafe(
+        `SELECT id FROM campaign_payment_config
+         WHERE campaign_id = ? AND creator_user_id = ? LIMIT 1`,
+        [campaign_id, user_id]
+      );
+
+      if (existing && existing.length > 0) {
+        await this.callQuerySafe(
+          `UPDATE campaign_payment_config
+           SET payment_status = 'PROCESSING', amount = ?, fee = ?, net_amount = ?, updated_at = NOW()
+           WHERE campaign_id = ? AND creator_user_id = ?`,
+          [gross, fee, net, campaign_id, user_id]
+        );
+      } else {
+        await this.insertData('campaign_payment_config', {
+          campaign_id,
+          creator_user_id: user_id,
+          currency,
+          payment_method: currency === 'USD' ? 'BANK' : 'M_PESA',
+          payment_status: 'PROCESSING',
+          amount: gross,
+          fee,
+          net_amount: net,
+        });
+      }
+
+      // Add to creator's pending wallet balance.
+      await this.callQuerySafe(
+        `UPDATE user_wallets
+         SET balance_pending = balance_pending + ?, total_earned = total_earned + ?, updated_at = NOW()
+         WHERE user_id = ? AND asset = ?`,
+        [net, net, user_id, currency]
+      );
+
+      // Mark invite as approved and in_review.
+      await this.updateData(
+        'act_campaign_invites',
+        `campaign_id='${campaign_id}' AND user_id='${user_id}'`,
+        { application_status: 'approved', pay_status: 'in_review' }
+      );
+
+      // Schedule the clearance window (PROCESSING → PENDING with clearance_date).
+      const escrowModel = new EscrowModel();
+      await escrowModel.releaseCreatorEarning(campaign_id, user_id, brandUserId);
+
+      this.sendAppNotification(user_id, 'SUBMISSION_APPROVED', ownership[0].title, net.toString(), '', '', 'CAMPAIGN');
+      this.updateCampaignCounters(campaign_id);
+      logger.info('approveSubmission success', { campaign_id, user_id, net, currency });
+
+      return this.makeResponse(200, 'Submission approved. Earnings are pending clearance.', { net_amount: net, currency });
+    } catch (error) {
+      logger.error('approveSubmission error:', error);
+      return this.makeResponse(500, 'Error approving submission');
+    }
+  }
+
   async requestRevision(data: any) {
     try {
       const { campaign_id, user_id, reason } = data;
@@ -499,17 +621,29 @@ export default class Campaigns extends Model {
       }
 
       const invite: any = await this.callQuerySafe(`
-        SELECT * FROM act_campaign_invites
+        SELECT id, revision_count FROM act_campaign_invites
         WHERE campaign_id='${campaign_id}' AND user_id='${user_id}' AND action_status='completed'
       `);
       if (invite.length === 0) {
         return this.makeResponse(404, "No completed submission found for this creator on this campaign");
       }
 
+      const currentCount = parseInt(invite[0].revision_count) || 0;
+      const escrowModel = new EscrowModel();
+      const maxRevisions = await escrowModel.getSettingNumber('max_revision_count', 3);
+
+      if (currentCount >= maxRevisions) {
+        // Notify the brand they've hit the cap.
+        const campaign = await this.getCampaignByIdAnyStatus(campaign_id);
+        const brandId = campaign[0]?.created_by_user_id || '';
+        this.sendAppNotification(brandId, 'REVISION_LIMIT_REACHED', '', String(maxRevisions), '', '', 'CAMPAIGN');
+        return this.makeResponse(400, `Revision limit of ${maxRevisions} reached for this submission. Please approve or reject it.`);
+      }
+
       await this.updateData(
         `act_campaign_invites`,
         `campaign_id='${campaign_id}' AND user_id='${user_id}'`,
-        { action_status: 'revision_required', reason }
+        { action_status: 'revision_required', reason, revision_count: currentCount + 1 }
       );
 
       const campaign = await this.getCampaignByIdAnyStatus(campaign_id);
@@ -517,7 +651,7 @@ export default class Campaigns extends Model {
       this.sendAppNotification(user_id, "REVISION_REQUIRED", reason, "", "", "", "CAMPAIGN", campaign[0].created_by);
 
       this.updateCampaignCounters(campaign_id);
-      return this.makeResponse(200, "Revision requested successfully");
+      return this.makeResponse(200, `Revision requested (${currentCount + 1}/${maxRevisions})`);
     } catch (error) {
       logger.error("requestRevision error:", error);
       return this.makeResponse(500, "Error requesting revision");
@@ -2448,6 +2582,191 @@ WHERE campaign_id = '${campaign_id}'`);
     } catch (error) {
       console.error("Error in closeCampaignManually:", error);
       return this.makeResponse(500, "Error closing campaign");
+    }
+  }
+
+  async cancelCampaign(data: any) {
+    const { campaign_id, userId, reason, isAdmin = false } = data;
+    try {
+      // Load campaign — brand or admin can cancel.
+      const campaigns: any = await this.callQuerySafe(
+        `SELECT campaign_id, title, status, funding_status, budget,
+                created_by_user_id, created_by
+         FROM act_campaigns WHERE campaign_id = ? LIMIT 1`,
+        [campaign_id]
+      );
+      if (!campaigns || campaigns.length === 0) {
+        return this.makeResponse(404, 'Campaign not found');
+      }
+      const campaign = campaigns[0];
+
+      if (!isAdmin && campaign.created_by_user_id !== userId) {
+        return this.makeResponse(403, 'You do not own this campaign');
+      }
+
+      const cancellableStatuses = ['draft', 'open_to_applications', 'active', 'funded'];
+      if (!cancellableStatuses.includes(campaign.status) &&
+          campaign.funding_status !== 'funded') {
+        return this.makeResponse(400, `Campaign in status "${campaign.status}" cannot be cancelled`);
+      }
+
+      if (campaign.status === 'cancelled') {
+        return this.makeResponse(400, 'Campaign is already cancelled');
+      }
+
+      // ── Calculate refund ─────────────────────────────────────────────────
+      const escrowRows: any = await this.callQuerySafe(
+        `SELECT escrow_id, total_amount, released_amount, platform_fee_amt,
+                currency, status AS escrow_status
+         FROM campaign_escrow WHERE campaign_id = ? LIMIT 1`,
+        [campaign_id]
+      );
+
+      let refundAmount = 0;
+      let currency = 'KES';
+
+      if (escrowRows && escrowRows.length > 0) {
+        const escrow = escrowRows[0];
+        currency = escrow.currency;
+        const released = parseFloat(escrow.released_amount) || 0;
+        const total    = parseFloat(escrow.total_amount)    || 0;
+
+        // Full refund if nothing released yet; otherwise refund unspent portion.
+        // Platform fee is waived on a pre-activation cancel, retained otherwise.
+        const wasActivated = ['active', 'partially_released', 'released'].includes(escrow.escrow_status);
+        const fee = wasActivated ? (parseFloat(escrow.platform_fee_amt) || 0) : 0;
+        refundAmount = parseFloat((total - released - fee).toFixed(2));
+      }
+
+      const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+
+      // ── Refund to brand's wallet ──────────────────────────────────────────
+      if (refundAmount > 0) {
+        const brandWallet: any = await this.callQuerySafe(
+          `SELECT wallet_id FROM user_wallets
+           WHERE user_id = ? AND asset = ? AND status = 'active' LIMIT 1`,
+          [campaign.created_by_user_id, currency]
+        );
+        const escrowWallet = (process.env.ESCROW_WALLET && process.env.ESCROW_WALLET !== 'undefined')
+          ? process.env.ESCROW_WALLET : 'ESCROW000000';
+
+        if (brandWallet && brandWallet.length > 0) {
+          const trans_id = `refund_${this.getRandomString()}`;
+          await this.walletTransfer(
+            trans_id,
+            campaign.created_by_user_id,
+            brandWallet[0].wallet_id,
+            'DEPOSIT',
+            refundAmount, 0, currency,
+            `Campaign cancellation refund: ${campaign.title}`,
+            escrowWallet,
+            campaign_id
+          );
+        }
+
+        // Update escrow record.
+        await this.callQuerySafe(
+          `UPDATE campaign_escrow
+           SET status = 'refunded', released_at = ?, admin_notes = ?
+           WHERE campaign_id = ?`,
+          [now, reason || 'Campaign cancelled', campaign_id]
+        );
+      }
+
+      // ── Cancel any pending invites ────────────────────────────────────────
+      await this.callQuerySafe(
+        `UPDATE act_campaign_invites
+         SET invite_status = 'rejected', reason = 'Campaign cancelled'
+         WHERE campaign_id = ? AND invite_status NOT IN ('rejected','completed')`,
+        [campaign_id]
+      );
+
+      // ── Mark campaign cancelled ───────────────────────────────────────────
+      await this.updateData('act_campaigns', `campaign_id = '${campaign_id}'`, {
+        status:      'cancelled',
+        closed_date: now,
+        closed_by:   userId,
+      });
+
+      // Notify brand and all affected creators.
+      this.sendAppNotification(
+        campaign.created_by_user_id, 'CAMPAIGN_REFUNDED',
+        campaign.title, refundAmount.toString(), '', '', 'CAMPAIGN'
+      );
+
+      const invitees: any = await this.callQuerySafe(
+        `SELECT DISTINCT user_id FROM act_campaign_invites WHERE campaign_id = ?`,
+        [campaign_id]
+      );
+      for (const inv of (invitees || [])) {
+        this.sendAppNotification(inv.user_id, 'CAMPAIGN_CANCELLED', campaign.title, '', '', '', 'CAMPAIGN');
+      }
+
+      logger.info('cancelCampaign success', { campaign_id, refundAmount, currency });
+      return this.makeResponse(200, `Campaign cancelled. ${refundAmount > 0 ? `${currency} ${refundAmount} refunded to your wallet.` : 'No refund applicable.'}`, {
+        refund_amount: refundAmount,
+        currency,
+      });
+    } catch (error) {
+      logger.error('cancelCampaign error:', error);
+      return this.makeResponse(500, 'Error cancelling campaign');
+    }
+  }
+
+  async autoApproveStalledSubmissions(): Promise<number> {
+    try {
+      const escrowModel = new EscrowModel();
+      const timeoutDays = await escrowModel.getSettingNumber('inaction_timeout_days', 7);
+
+      // Find invites that have been sitting at 'completed' with no pay action
+      // for longer than inaction_timeout_days.
+      const stalled: any = await this.callQuerySafe(
+        `SELECT i.user_id, i.campaign_id, c.created_by_user_id AS brand_user_id
+         FROM act_campaign_invites i
+         JOIN act_campaigns c ON c.campaign_id = i.campaign_id
+         WHERE i.action_status = 'completed'
+           AND i.pay_status NOT IN ('paid', 'in_review')
+           AND i.completed_at IS NOT NULL
+           AND i.completed_at <= DATE_SUB(NOW(), INTERVAL ? DAY)
+           AND c.status NOT IN ('cancelled', 'completed', 'closed')`,
+        [timeoutDays]
+      );
+
+      if (!stalled || stalled.length === 0) return 0;
+
+      let approved = 0;
+      for (const row of stalled) {
+        try {
+          const result = await this.approveSubmission({
+            campaign_id:  row.campaign_id,
+            user_id:      row.user_id,
+            brandUserId:  row.brand_user_id,
+          });
+
+          if (result.status === 200) {
+            // Override notification to the auto-approved template.
+            this.sendAppNotification(
+              row.user_id, 'SUBMISSION_AUTO_APPROVED',
+              row.campaign_id, '', '', '', 'CAMPAIGN'
+            );
+            approved++;
+          } else {
+            logger.warn('autoApproveStalledSubmissions: approveSubmission failed', {
+              campaign_id: row.campaign_id,
+              user_id: row.user_id,
+              result,
+            });
+          }
+        } catch (rowErr) {
+          logger.error('autoApproveStalledSubmissions row error', { row, rowErr });
+        }
+      }
+
+      logger.info('autoApproveStalledSubmissions complete', { approved, total: stalled.length });
+      return approved;
+    } catch (error) {
+      logger.error('autoApproveStalledSubmissions error:', error);
+      return 0;
     }
   }
 

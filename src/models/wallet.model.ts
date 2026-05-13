@@ -114,27 +114,79 @@ export default class Payments extends Model {
   async webhookRel(data: any) {
     try {
       console.log(`webhookRel`, data)
-      const { status, customer_reference } = data;
-      this.logOperation("RELWORX_WEBHOOK", data.internal_reference, data.customer_reference, data)
+      const { status, customer_reference, internal_reference } = data;
+      this.logOperation("RELWORX_WEBHOOK", internal_reference, customer_reference, data)
 
       if (!customer_reference) {
         return this.makeResponse(400, "Internal reference is required");
       }
 
-      // Retrieve the transaction using the internal reference
-      const transaction: any = await this.callQuerySafe(`SELECT * FROM wl_transactions WHERE trans_id='${customer_reference}'`);
+      // ── KES B2C withdrawal async callback ──────────────────────────────
+      // customer_reference is the request_id we sent as the Relworx reference.
+      const kesReq: any = await this.callQuerySafe(
+        `SELECT request_id, user_id, amount, status AS req_status
+         FROM kes_withdrawal_requests WHERE request_id = ? LIMIT 1`,
+        [customer_reference]
+      );
+
+      if (kesReq && kesReq.length > 0) {
+        const req = kesReq[0];
+
+        if (req.req_status === 'PAID' || req.req_status === 'REVERSED') {
+          // Already finalised by the synchronous response — ignore duplicate.
+          return this.makeResponse(200, 'Already processed');
+        }
+
+        if (status === 'success') {
+          await this.callQuerySafe(
+            `UPDATE kes_withdrawal_requests
+             SET status = 'PAID', relworx_ref = ?, updated_at = NOW()
+             WHERE request_id = ?`,
+            [internal_reference || customer_reference, customer_reference]
+          );
+          this.sendAppNotification(
+            req.user_id, 'KES_WITHDRAWAL_SUCCESS',
+            '', req.amount.toString(), '', internal_reference || '', 'WALLET'
+          );
+        } else {
+          // Failure: restore the creator's balance.
+          await this.callQuerySafe(
+            `UPDATE kes_withdrawal_requests
+             SET status = 'REVERSED', failure_reason = ?, updated_at = NOW()
+             WHERE request_id = ?`,
+            [data.message || 'Relworx callback failure', customer_reference]
+          );
+          await this.callQuerySafe(
+            `UPDATE user_wallets
+             SET balance_available = balance_available + ?,
+                 balance           = balance + ?,
+                 total_withdrawn   = GREATEST(0, total_withdrawn - ?),
+                 updated_at        = NOW()
+             WHERE user_id = ? AND asset = 'KES'`,
+            [req.amount, req.amount, req.amount, req.user_id]
+          );
+          this.sendAppNotification(
+            req.user_id, 'KES_WITHDRAWAL_FAILED',
+            '', req.amount.toString(), data.message || 'Payout reversed', '', 'WALLET'
+          );
+          logger.error('kesWithdraw async reversal via webhook', { customer_reference, reason: data.message });
+        }
+        return this.makeResponse(200, 'KES withdrawal webhook processed');
+      }
+
+      // ── Original deposit / generic withdrawal flow ──────────────────────
+      const transaction: any = await this.callQuerySafe(
+        `SELECT * FROM wl_transactions WHERE trans_id='${customer_reference}'`
+      );
       if (transaction.length === 0) {
         return this.makeResponse(404, "Transaction not found");
       }
-      const trans_type = transaction[0].trans_type
-      if (trans_type == "DEPOSIT") {
+      const trans_type = transaction[0].trans_type;
+      if (trans_type === "DEPOSIT") {
         const updatedStatus = status === "success" ? "success" : "failed";
-        const amount = transaction[0].cr_amount
+        const amount = transaction[0].cr_amount;
         return await this.completePendingDeposit(customer_reference, amount, updatedStatus);
-
       } else {
-
-        // Update the transaction status based on the webhook data
         const updatedStatus = status === "success" ? "SUCCESS" : "FAILED";
         await this.updateData('wl_transactions', `trans_id='${customer_reference}'`, { status: updatedStatus });
         return this.makeResponse(200, "Transaction status updated successfully");
@@ -1163,6 +1215,186 @@ export default class Payments extends Model {
   }
 
 
+
+  // ── KES M-Pesa B2C Withdrawal ──────────────────────────────────────────────
+  // Draws exclusively from balance_available (earned, cleared funds).
+  // Balance is deducted atomically before the Relworx call; restored immediately
+  // on API failure so the creator's money is never silently lost.
+
+  async kesWithdraw(data: any) {
+    const { userId, amount, msisdn, pin } = data;
+
+    // ── 1. Input validation ────────────────────────────────────────────────
+    if (!userId || !amount || !msisdn || !pin) {
+      return this.makeResponse(400, 'userId, amount, msisdn, and pin are required');
+    }
+    if (typeof amount !== 'number' || amount <= 0) {
+      return this.makeResponse(400, 'Amount must be a positive number');
+    }
+
+    // Normalise M-Pesa number to E.164 (+254...)
+    let phone = String(msisdn).replace(/\s+/g, '');
+    if (!phone.startsWith('+')) phone = `+${phone}`;
+    const phoneRegex = /^\+[1-9]\d{6,14}$/;
+    if (!phoneRegex.test(phone)) {
+      return this.makeResponse(400, 'Invalid M-Pesa number format. Use E.164 e.g. +254712345678');
+    }
+
+    // ── 2. PIN validation ──────────────────────────────────────────────────
+    const pinValidation = await this.validatePin(userId, pin);
+    if (pinValidation.status !== 200) return pinValidation;
+
+    // ── 3. Account lock check ──────────────────────────────────────────────
+    const lockCheck = await this.isAccountLocked(userId);
+    if (lockCheck !== false) return lockCheck;
+
+    // ── 4. KES wallet + available balance check ────────────────────────────
+    const wallet: any = await this.callQuerySafe(
+      `SELECT wallet_id, balance_available FROM user_wallets
+       WHERE user_id = ? AND asset = 'KES' AND status = 'active' LIMIT 1`,
+      [userId]
+    );
+    if (!wallet || wallet.length === 0) {
+      return this.makeResponse(404, 'KES wallet not found. Please set up your wallet first.');
+    }
+    const { wallet_id, balance_available } = wallet[0];
+    const available = parseFloat(balance_available) || 0;
+
+    if (available < amount) {
+      return this.makeResponse(400, `Insufficient available balance. Available: KES ${available.toFixed(2)}`);
+    }
+
+    // ── 5. Validate M-Pesa number with Relworx ─────────────────────────────
+    const validation = await mm.validateNumber(phone);
+    if (validation.status !== 200) {
+      return this.makeResponse(400, `M-Pesa number validation failed: ${validation.message}`);
+    }
+
+    // ── 6. Atomically deduct from balance_available ────────────────────────
+    const request_id = `kwr${this.getRandomString()}`;
+    const trans_id   = `t${this.getRandomString()}`;
+
+    await this.callQuerySafe(
+      `UPDATE user_wallets
+       SET balance_available = balance_available - ?,
+           balance           = GREATEST(0, balance - ?),
+           total_withdrawn   = total_withdrawn + ?,
+           updated_at        = NOW()
+       WHERE user_id = ? AND asset = 'KES' AND balance_available >= ?`,
+      [amount, amount, amount, userId, amount]
+    );
+
+    // Confirm the update actually applied (another request may have raced).
+    const check: any = await this.callQuerySafe(
+      `SELECT balance_available FROM user_wallets WHERE user_id = ? AND asset = 'KES' LIMIT 1`,
+      [userId]
+    );
+    const newAvailable = parseFloat(check?.[0]?.balance_available ?? '-1');
+    if (newAvailable < 0 || newAvailable > available - amount + 0.01) {
+      // Race condition: balance wasn't deducted — abort.
+      return this.makeResponse(400, 'Concurrent withdrawal detected. Please try again.');
+    }
+
+    // Record the request row (PROCESSING).
+    await this.insertData('kes_withdrawal_requests', {
+      request_id,
+      user_id:   userId,
+      trans_id,
+      amount,
+      msisdn:    phone,
+      status:    'PROCESSING',
+    });
+
+    // Log debit transaction for audit trail.
+    try {
+      await this.walletTransfer(
+        trans_id, userId, 'MPESA_B2C', 'WITHDRAW',
+        amount, 0, 'KES', 'M-Pesa withdrawal', wallet_id, request_id,
+        'MOBILE', phone, ''
+      );
+    } catch (_) {
+      // walletTransfer logging failure must not abort the payout.
+      logger.warn('kesWithdraw: walletTransfer log failed', { trans_id });
+    }
+
+    // ── 7. Trigger Relworx B2C payout ─────────────────────────────────────
+    let relworxResponse: any;
+    try {
+      relworxResponse = await mm.sendPayment(request_id, phone, 'KES', amount, 'SocialGems Earnings');
+      logger.info('kesWithdraw Relworx response', { request_id, response: relworxResponse });
+    } catch (apiErr: any) {
+      logger.error('kesWithdraw Relworx API exception', { request_id, apiErr });
+      relworxResponse = { status: 500, message: 'API call failed', data: null };
+    }
+
+    // ── 8. Handle Relworx response ─────────────────────────────────────────
+    if (relworxResponse.status === 200) {
+      const relworx_ref = relworxResponse.data?.internal_reference
+                       || relworxResponse.data?.reference
+                       || request_id;
+
+      await this.callQuerySafe(
+        `UPDATE kes_withdrawal_requests
+         SET status = 'PAID', relworx_ref = ?, updated_at = NOW()
+         WHERE request_id = ?`,
+        [relworx_ref, request_id]
+      );
+
+      this.sendAppNotification(
+        userId, 'KES_WITHDRAWAL_SUCCESS',
+        '', amount.toString(), phone, relworx_ref, 'WALLET'
+      );
+      logger.info('kesWithdraw success', { request_id, amount, phone, relworx_ref });
+      return this.makeResponse(200, `KES ${amount} sent to ${phone} successfully.`, {
+        request_id, relworx_ref, amount, msisdn: phone,
+      });
+
+    } else {
+      // ── 9. Failure: restore balance ───────────────────────────────────────
+      const reason = relworxResponse.message || 'Relworx payout failed';
+
+      await this.callQuerySafe(
+        `UPDATE kes_withdrawal_requests
+         SET status = 'FAILED', failure_reason = ?, retry_count = retry_count + 1, updated_at = NOW()
+         WHERE request_id = ?`,
+        [reason, request_id]
+      );
+
+      await this.callQuerySafe(
+        `UPDATE user_wallets
+         SET balance_available = balance_available + ?,
+             balance           = balance + ?,
+             total_withdrawn   = GREATEST(0, total_withdrawn - ?),
+             updated_at        = NOW()
+         WHERE user_id = ? AND asset = 'KES'`,
+        [amount, amount, amount, userId]
+      );
+
+      this.sendAppNotification(
+        userId, 'KES_WITHDRAWAL_FAILED',
+        '', amount.toString(), reason, '', 'WALLET'
+      );
+      logger.error('kesWithdraw failed — balance restored', { request_id, reason });
+      return this.makeResponse(400, `Withdrawal failed: ${reason}. Your balance has been restored.`);
+    }
+  }
+
+  async getMyKesWithdrawals(userId: string) {
+    try {
+      const rows: any = await this.callQuerySafe(
+        `SELECT request_id, amount, msisdn, relworx_ref, status, failure_reason, created_at, updated_at
+         FROM kes_withdrawal_requests
+         WHERE user_id = ?
+         ORDER BY created_at DESC
+         LIMIT 50`,
+        [userId]
+      );
+      return this.makeResponse(200, 'KES withdrawals', rows);
+    } catch (error) {
+      logger.error('getMyKesWithdrawals error:', error);
+      return this.makeResponse(500, 'Error fetching withdrawals');
+    }
+  }
 
   async getActiveSubscription(userId: string) {
     try {

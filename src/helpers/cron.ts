@@ -6,6 +6,7 @@ import Notifications from '../models/notifications.admin.model';
 import Model from './model';
 import Campaigns from '../models/campaigns.model';
 import Wallet from '../models/wallet.model';
+import Escrow from '../models/escrow.model';
 
 class CronService {
     constructor() {
@@ -19,6 +20,9 @@ class CronService {
         this.scheduleExchangeRatesUpdate();
         this.scheduleReliabilityScoreUpdate();
         this.scheduleDelayMonitoring();
+        this.scheduleEarningsClearance();
+        this.scheduleBrandInactionTimeout();
+        this.scheduleIdempotencyKeyPurge();
     }
 
 
@@ -162,6 +166,53 @@ class CronService {
                 }
             } catch (error) {
                 console.error('Error running campaign delay monitoring:', error);
+            }
+        });
+    }
+
+    // Runs every 6 hours.
+    // Finds completed submissions where the brand has taken no action for
+    // inaction_timeout_days. Auto-approves each one so creators are not left
+    // waiting indefinitely.
+    private scheduleBrandInactionTimeout() {
+        cron.schedule('0 */6 * * *', async () => {
+            console.log('Running brand inaction timeout check...');
+            try {
+                await new Model().saveCronLg('BRAND_INACTION_TIMEOUT');
+                const autoApproved = await new Campaigns().autoApproveStalledSubmissions();
+                console.log(`Brand inaction timeout: ${autoApproved} submission(s) auto-approved.`);
+            } catch (error) {
+                console.error('Error running brand inaction timeout:', error);
+            }
+        });
+    }
+
+    // Runs every 6 hours.
+    // Finds creator earnings whose clearance_date has passed and moves them
+    // from PENDING to AVAILABLE, crediting the creator's balance_available wallet.
+    private scheduleEarningsClearance() {
+        cron.schedule('0 */6 * * *', async () => {
+            console.log('Running earnings clearance...');
+            try {
+                await new Model().saveCronLg(`EARNINGS_CLEARANCE`);
+                const { cleared } = await new Escrow().processClearances();
+                console.log(`Earnings clearance complete. ${cleared} earning(s) released to Available.`);
+            } catch (error) {
+                console.error('Error running earnings clearance:', error);
+            }
+        });
+    }
+
+    // Runs daily at 04:00. Removes expired idempotency keys to keep the table lean.
+    private scheduleIdempotencyKeyPurge() {
+        cron.schedule('0 4 * * *', async () => {
+            try {
+                await new Model().saveCronLg('IDEMPOTENCY_KEY_PURGE');
+                await new Model().callQuerySafe(
+                    `DELETE FROM idempotency_keys WHERE expires_at < NOW()`
+                );
+            } catch (error) {
+                console.error('Error purging idempotency keys:', error);
             }
         });
     }

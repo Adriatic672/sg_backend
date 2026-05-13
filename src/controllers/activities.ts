@@ -32,20 +32,34 @@ router.post('/cacheNews', applyAdminJWTConditionally, cacheNews);
 router.post('/deleteCampaignTask', applyJWTConditionally, deleteCampaignTask);
 router.post('/updateCampaignTask', applyJWTConditionally, updateCampaignTask);
 router.get('/communityFeed', applyJWTConditionally, communityFeed);
+router.post('/community/post', applyJWTConditionally, createCommunityPost);
 
 
 
 
 async function communityFeed(req: Request, res: Response) {
   try {
-    const { page, limit } = req.query;
+    const { page, limit, type } = req.query;
     const result = await activity.getCommunityFeed({
       page:  page  as string,
       limit: limit as string,
+      type:  type  as string,
     });
     res.status(result.status).json(result);
   } catch (error) {
     res.status(500).json({ message: 'Error fetching community feed', error });
+  }
+}
+
+async function createCommunityPost(req: Request, res: Response) {
+  try {
+    const userId   = (req as any).user?.userId || (req as any).user?.user_id;
+    const username = (req as any).user?.username || req.body.username || '';
+    const { text, images } = req.body;
+    const result = await activity.createCommunityPost({ userId, username, text, images });
+    res.status(result.status).json(result);
+  } catch (error) {
+    res.status(500).json({ message: 'Error creating community post', error });
   }
 }
 

@@ -68,6 +68,10 @@ import { requestLogger, globalErrorHandler } from './helpers/errorHandler.middle
 import reports from './controllers/reports';
 import social from './controllers/social';
 import stellar from './controllers/stellar';
+import debug from './controllers/debug';
+import adminSettingsRouter from './controllers/adminSettings';
+import swaggerUi from 'swagger-ui-express';
+import { swaggerSpec } from './helpers/swagger';
 // Import WebSocket initializer
 import initializeWebSocket from './controllers/ws';
 
@@ -128,12 +132,18 @@ app.use('/wallet', wallet);
 app.use('/stellar', stellar);
 app.use('/notifications', notifications);
 app.use('/admin/reports', reports);
+app.use('/admin/settings', adminSettingsRouter);
 app.use('/analytics', analytics);
 app.use('/roles', roles);
 app.use('/maker-checker', makerChecker);
 app.use('/oauth', social);
 app.use('/agents', agents);
 app.use('/jobs', jobboard);
+app.use('/debug', debug);
+
+// API documentation
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+app.get('/api-docs.json', (_req, res) => res.json(swaggerSpec));
 
 // Serve mock uploaded files (for development)
 const mockUploadPath = path.join(process.cwd(), '..', 'social_gems_uploads');

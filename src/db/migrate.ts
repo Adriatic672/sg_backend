@@ -25,10 +25,12 @@ class MigrationRunner {
 
   async connect() {
     this.connection = await mysql.createConnection({
-      host: process.env.DB_HOST || 'localhost',
-      user: process.env.DB_USER || 'root',
-      password: process.env.DB_PASSWORD || '',
-      database: process.env.DB_NAME || '2025_socialgems'
+      host: process.env.DB_HOST || process.env.HOST_NAME || 'localhost',
+      port: parseInt(process.env.DB_PORT || '3306'),
+      user: process.env.DB_USER || process.env.USER_NAME || 'root',
+      password: process.env.DB_PASSWORD || process.env.PASSWORD || '',
+      database: process.env.DB_NAME || process.env.DBNAME || 'socialgems',
+      multipleStatements: true,
     });
   }
 

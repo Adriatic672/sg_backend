@@ -1025,99 +1025,167 @@ COALESCE(p.username, 'admin') AS username,
         ? process.env.ESCROW_WALLET
         : 'ESCROW000000';
 
-      // 1. Escrow wallet balance
-      const escrowRow: any = await this.callQuerySafe(`
-        SELECT COALESCE(balance, 0) AS balance, asset
-        FROM user_wallets
-        WHERE wallet_id = '${escrowWalletId}'
-      `);
-      const escrow = escrowRow[0] || { balance: 0, asset: 'USD' };
+      // Run all independent queries in parallel for speed.
+      const [
+        escrowRow,
+        liabilityRows,
+        withdrawalRows,
+        usdBankRow,
+        escrowPerCampaign,
+        kesWithdrawalRows,
+        pendingEarningsRow,
+        escrowTotals,
+      ] = await Promise.all([
 
-      // 2. KES & USD liability (sum of all non-admin user wallets)
-      const liabilityRows: any = await this.callQuerySafe(`
-        SELECT asset, COALESCE(SUM(balance), 0) AS total
-        FROM user_wallets
-        WHERE user_id != 'admin'
-          AND wallet_id != '${escrowWalletId}'
-        GROUP BY asset
-      `);
-      const liability: any = { KES: 0, USD: 0 };
-      liabilityRows.forEach((r: any) => { liability[r.asset] = parseFloat(r.total) || 0; });
+        // 1. Escrow wallet balance (legacy wallet-based escrow)
+        this.callQuerySafe(`
+          SELECT COALESCE(balance, 0) AS balance, asset
+          FROM user_wallets WHERE wallet_id = '${escrowWalletId}'
+        `),
 
-      // 3. Withdrawal breakdown — grouped by currency and system_status
-      const withdrawalRows: any = await this.callQuerySafe(`
-        SELECT
-          currency,
-          system_status,
-          COUNT(*)       AS count,
-          COALESCE(SUM(amount), 0) AS total
-        FROM wl_transactions
-        WHERE trans_type = 'DR'
-          AND system_status IN ('SUCCESS', 'FAILED', 'PROCESSING', 'PENDING_REVERSAL')
-        GROUP BY currency, system_status
-      `);
+        // 2. KES & USD liability — sum of all creator/brand wallet balances
+        this.callQuerySafe(`
+          SELECT asset,
+            COALESCE(SUM(balance), 0)           AS total_balance,
+            COALESCE(SUM(balance_pending), 0)   AS total_pending,
+            COALESCE(SUM(balance_available), 0) AS total_available
+          FROM user_wallets
+          WHERE user_id NOT IN ('admin', '${escrowWalletId}')
+            AND wallet_id != '${escrowWalletId}'
+          GROUP BY asset
+        `),
 
+        // 3. Withdrawal breakdown from wl_transactions
+        this.callQuerySafe(`
+          SELECT currency, system_status,
+            COUNT(*) AS count,
+            COALESCE(SUM(amount), 0) AS total
+          FROM wl_transactions
+          WHERE trans_type = 'DR'
+            AND system_status IN ('SUCCESS','FAILED','PROCESSING','PENDING_REVERSAL')
+          GROUP BY currency, system_status
+        `),
+
+        // 4. Pending USD bank withdrawals awaiting admin action
+        this.callQuerySafe(`
+          SELECT COUNT(*) AS count, COALESCE(SUM(amount), 0) AS total
+          FROM usd_withdrawal_requests WHERE status = 'PENDING'
+        `),
+
+        // 5. Per-campaign escrow from campaign_escrow table
+        this.callQuerySafe(`
+          SELECT
+            ce.campaign_id, ce.currency, ce.status AS escrow_status,
+            ce.total_amount, ce.platform_fee_amt, ce.creator_pool,
+            ce.released_amount,
+            GREATEST(ce.creator_pool - ce.released_amount, 0) AS unreleased,
+            c.title, c.status AS campaign_status
+          FROM campaign_escrow ce
+          JOIN act_campaigns c ON c.campaign_id = ce.campaign_id
+          WHERE ce.status IN ('funded','active','partially_released')
+          ORDER BY ce.created_at DESC
+          LIMIT 100
+        `),
+
+        // 6. KES M-Pesa B2C withdrawal stats from kes_withdrawal_requests
+        this.callQuerySafe(`
+          SELECT status,
+            COUNT(*) AS count,
+            COALESCE(SUM(amount), 0) AS total
+          FROM kes_withdrawal_requests
+          GROUP BY status
+        `),
+
+        // 7. Earnings currently sitting in PENDING clearance
+        this.callQuerySafe(`
+          SELECT currency,
+            COUNT(*) AS count,
+            COALESCE(SUM(net_amount), 0) AS total
+          FROM campaign_payment_config
+          WHERE payment_status = 'PENDING'
+          GROUP BY currency
+        `),
+
+        // 8. Aggregate escrow table totals by currency
+        this.callQuerySafe(`
+          SELECT currency,
+            COALESCE(SUM(total_amount), 0)    AS total_escrowed,
+            COALESCE(SUM(platform_fee_amt), 0) AS total_fees,
+            COALESCE(SUM(creator_pool), 0)    AS total_creator_pool,
+            COALESCE(SUM(released_amount), 0) AS total_released
+          FROM campaign_escrow
+          GROUP BY currency
+        `),
+      ]) as any[];
+
+      // Shape liability
+      const liability: any = { KES: { total: 0, pending: 0, available: 0 }, USD: { total: 0, pending: 0, available: 0 } };
+      (liabilityRows as any[]).forEach((r: any) => {
+        liability[r.asset] = {
+          total:     parseFloat(r.total_balance)    || 0,
+          pending:   parseFloat(r.total_pending)    || 0,
+          available: parseFloat(r.total_available)  || 0,
+        };
+      });
+
+      // Shape wl_transactions withdrawal stats
       const withdrawals: any = {
         KES: { pending: { count: 0, total: 0 }, successful: { count: 0, total: 0 }, failed: { count: 0, total: 0 } },
         USD: { pending: { count: 0, total: 0 }, successful: { count: 0, total: 0 }, failed: { count: 0, total: 0 } },
       };
-      withdrawalRows.forEach((r: any) => {
+      (withdrawalRows as any[]).forEach((r: any) => {
         const cur = r.currency as string;
         if (!withdrawals[cur]) withdrawals[cur] = { pending: { count: 0, total: 0 }, successful: { count: 0, total: 0 }, failed: { count: 0, total: 0 } };
         const cnt = parseInt(r.count) || 0;
         const tot = parseFloat(r.total) || 0;
         if (['PROCESSING', 'PENDING_REVERSAL'].includes(r.system_status)) {
-          withdrawals[cur].pending.count += cnt;
-          withdrawals[cur].pending.total += tot;
+          withdrawals[cur].pending.count += cnt; withdrawals[cur].pending.total += tot;
         } else if (r.system_status === 'SUCCESS') {
-          withdrawals[cur].successful.count += cnt;
-          withdrawals[cur].successful.total += tot;
+          withdrawals[cur].successful.count += cnt; withdrawals[cur].successful.total += tot;
         } else {
-          withdrawals[cur].failed.count += cnt;
-          withdrawals[cur].failed.total += tot;
+          withdrawals[cur].failed.count += cnt; withdrawals[cur].failed.total += tot;
         }
       });
 
-      // 4. Pending USD bank withdrawal requests awaiting admin action
-      const usdBankRow: any = await this.callQuerySafe(`
-        SELECT COUNT(*) AS count, COALESCE(SUM(amount), 0) AS total
-        FROM usd_withdrawal_requests
-        WHERE status = 'PENDING'
-      `);
-      const pendingUsdBank = {
-        count: parseInt(usdBankRow[0]?.count) || 0,
-        total: parseFloat(usdBankRow[0]?.total) || 0,
-      };
+      // Shape KES B2C withdrawal stats (our new table)
+      const kesWithdrawals: any = { processing: { count: 0, total: 0 }, paid: { count: 0, total: 0 }, failed: { count: 0, total: 0 }, reversed: { count: 0, total: 0 } };
+      (kesWithdrawalRows as any[]).forEach((r: any) => {
+        const key = (r.status as string).toLowerCase();
+        if (kesWithdrawals[key]) {
+          kesWithdrawals[key].count = parseInt(r.count) || 0;
+          kesWithdrawals[key].total = parseFloat(r.total) || 0;
+        }
+      });
 
-      // 5. Escrow per campaign.
-      // budget = what was locked into escrow when the campaign was activated.
-      // paid_out = what has already been released to creators (SUCCESS payments).
-      // remaining = budget − paid_out (still held in escrow for this campaign).
-      const escrowPerCampaign: any = await this.callQuerySafe(`
-        SELECT
-          c.campaign_id,
-          c.title,
-          c.status,
-          c.budget,
-          COALESCE(cpu.paid_out, 0)                    AS paid_out,
-          GREATEST(c.budget - COALESCE(cpu.paid_out, 0), 0) AS remaining_escrow
-        FROM act_campaigns c
-        LEFT JOIN (
-          SELECT campaign_id, SUM(amount_paid) AS paid_out
-          FROM campaign_payments_users
-          WHERE trans_status = 'SUCCESS'
-          GROUP BY campaign_id
-        ) cpu ON cpu.campaign_id = c.campaign_id
-        WHERE c.status IN ('active', 'open_to_applications', 'pending_funding')
-        ORDER BY c.created_at DESC
-        LIMIT 100
-      `);
+      // Shape pending earnings
+      const pendingEarnings: any = { KES: { count: 0, total: 0 }, USD: { count: 0, total: 0 } };
+      (pendingEarningsRow as any[]).forEach((r: any) => {
+        pendingEarnings[r.currency] = { count: parseInt(r.count) || 0, total: parseFloat(r.total) || 0 };
+      });
+
+      // Shape escrow aggregate totals
+      const escrowSummary: any = { KES: {}, USD: {} };
+      (escrowTotals as any[]).forEach((r: any) => {
+        escrowSummary[r.currency] = {
+          total_escrowed:  parseFloat(r.total_escrowed)  || 0,
+          platform_fees:   parseFloat(r.total_fees)      || 0,
+          creator_pool:    parseFloat(r.total_creator_pool) || 0,
+          released:        parseFloat(r.total_released)  || 0,
+          unreleased:      Math.max(0, (parseFloat(r.total_creator_pool) || 0) - (parseFloat(r.total_released) || 0)),
+        };
+      });
 
       return this.makeResponse(200, 'success', {
-        escrow,
+        escrow_wallet:      (escrowRow as any[])[0] || { balance: 0, asset: 'USD' },
+        escrow_summary:     escrowSummary,
         liability,
         withdrawals,
-        pending_usd_bank: pendingUsdBank,
+        kes_b2c_withdrawals: kesWithdrawals,
+        pending_earnings:   pendingEarnings,
+        pending_usd_bank: {
+          count: parseInt((usdBankRow as any[])[0]?.count) || 0,
+          total: parseFloat((usdBankRow as any[])[0]?.total) || 0,
+        },
         escrow_per_campaign: escrowPerCampaign,
       });
     } catch (error) {
@@ -1250,6 +1318,103 @@ COALESCE(p.username, 'admin') AS username,
 
   async adminWallets() {
     return await this.callQuerySafe(`SELECT * FROM user_wallets where user_id ='admin'`);
+  }
+
+  // ---------------------------------------------------------------------------
+  // KES B2C withdrawal — admin view (read-only; payouts are automated)
+  // ---------------------------------------------------------------------------
+
+  async getKesWithdrawalRequests(params: {
+    status?: string;
+    page?: string;
+    limit?: string;
+  } = {}) {
+    const { status, page = '1', limit = '50' } = params;
+    const pageNum  = Math.max(1, parseInt(page)  || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 50));
+    const offset   = (pageNum - 1) * limitNum;
+
+    const allowed = ['PROCESSING', 'PAID', 'FAILED', 'REVERSED'];
+    const whereStatus = status && allowed.includes(status.toUpperCase())
+      ? `AND k.status = '${status.toUpperCase()}'`
+      : '';
+
+    try {
+      const countResult: any = await this.callQuerySafe(`
+        SELECT COUNT(*) AS total FROM kes_withdrawal_requests k WHERE 1=1 ${whereStatus}
+      `);
+      const total = parseInt(countResult[0]?.total) || 0;
+
+      const rows: any = await this.callQuerySafe(`
+        SELECT
+          k.request_id, k.amount, k.msisdn, k.relworx_ref,
+          k.status, k.failure_reason, k.retry_count,
+          k.created_at, k.updated_at,
+          p.username, p.first_name, p.last_name, p.profile_pic
+        FROM kes_withdrawal_requests k
+        INNER JOIN users_profile p ON k.user_id = p.user_id
+        WHERE 1=1 ${whereStatus}
+        ORDER BY k.created_at DESC
+        LIMIT ${limitNum} OFFSET ${offset}
+      `);
+
+      return this.makeResponse(200, 'success', {
+        requests: rows,
+        pagination: { total, page: pageNum, limit: limitNum, pages: Math.ceil(total / limitNum) },
+      });
+    } catch (error) {
+      logger.error('getKesWithdrawalRequests error:', error);
+      return this.makeResponse(500, 'Error fetching KES withdrawal requests');
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Financial CSV export
+  // ---------------------------------------------------------------------------
+
+  async exportFinancialsCsv(type: string) {
+    try {
+      let rows: any[] = [];
+      let headers: string[] = [];
+
+      if (type === 'usd_withdrawals') {
+        headers = ['request_id','user_id','amount','currency','account_number','account_name','bank_name','swift_code','status','reference','admin_notes','processed_by','processed_at','created_at'];
+        rows = await this.callQuerySafe(`SELECT ${headers.join(',')} FROM usd_withdrawal_requests ORDER BY created_at DESC`);
+
+      } else if (type === 'kes_withdrawals') {
+        headers = ['request_id','user_id','amount','msisdn','relworx_ref','status','failure_reason','retry_count','created_at','updated_at'];
+        rows = await this.callQuerySafe(`SELECT ${headers.join(',')} FROM kes_withdrawal_requests ORDER BY created_at DESC`);
+
+      } else if (type === 'escrow') {
+        headers = ['escrow_id','campaign_id','brand_user_id','currency','total_amount','platform_fee_pct','platform_fee_amt','creator_pool','released_amount','status','payment_reference','funded_at','activated_at','released_at','confirmed_by','created_at'];
+        rows = await this.callQuerySafe(`SELECT ${headers.join(',')} FROM campaign_escrow ORDER BY created_at DESC`);
+
+      } else if (type === 'transactions') {
+        headers = ['trans_id','user_id','currency','amount','trans_type','status','system_status','payment_method','message','created_at'];
+        rows = await this.callQuerySafe(`
+          SELECT trans_id, user_id, currency, amount, trans_type, status, system_status, payment_method, message, created_at
+          FROM wl_transactions ORDER BY created_at DESC LIMIT 10000
+        `);
+
+      } else {
+        return null;
+      }
+
+      const escape = (v: any) => {
+        if (v === null || v === undefined) return '';
+        const s = String(v).replace(/"/g, '""');
+        return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s}"` : s;
+      };
+
+      const csvLines = [headers.join(',')];
+      for (const row of (rows as any[])) {
+        csvLines.push(headers.map((h: string) => escape(row[h])).join(','));
+      }
+      return csvLines.join('\n');
+    } catch (error) {
+      logger.error('exportFinancialsCsv error:', error);
+      return null;
+    }
   }
 
   // ---------------------------------------------------------------------------

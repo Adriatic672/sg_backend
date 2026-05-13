@@ -121,8 +121,12 @@ router.get('/getJobs', applyJWTConditionally, getJobs);
 router.get('/delayedCampaigns', applyJWTConditionally, getDelayedCampaigns);
 router.get('/usdWithdrawals', applyJWTConditionally, getUsdWithdrawalRequests);
 router.post('/processUsdWithdrawal', applyJWTConditionally, processUsdWithdrawal);
+router.get('/kesWithdrawals', applyJWTConditionally, getKesWithdrawalRequests);
 router.get('/financialDashboard', applyJWTConditionally, getFinancialDashboard);
+router.get('/exportFinancials', applyJWTConditionally, exportFinancials);
 router.get('/communityFeed', applyJWTConditionally, getCommunityFeed);
+router.post('/community/announcement', applyJWTConditionally, createAnnouncement);
+router.delete('/community/post/:id', applyJWTConditionally, deleteCommunityPost);
 
 // ─── Campaign Manager Routes ─────────────────────────────────────────────────
 router.get('/campaignManagers', applyJWTConditionally, requireSuperAdmin, getCampaignManagers);
@@ -208,10 +212,54 @@ async function getUsdWithdrawalRequests(req: Request, res: Response) {
 
 async function processUsdWithdrawal(req: Request, res: Response) {
   try {
-    const result = await companyServices.processUsdWithdrawal(req.body);
+    const userId = (req as any).user?.userId || (req as any).user?.user_id;
+    const result = await companyServices.processUsdWithdrawal({ ...req.body, userId });
+    if (result.status === 200) {
+      const AuditModel = require('../models/audit.model').default;
+      new AuditModel().logAdminAction({
+        adminUserId: userId,
+        action:      'PROCESS_USD_WITHDRAWAL',
+        targetType:  'withdrawal',
+        targetId:    req.body.request_id || req.body.trans_id,
+        details:     { amount: req.body.amount, currency: 'USD' },
+        ipAddress:   req.ip,
+      });
+    }
     res.status(result.status).json(result);
   } catch (error) {
     res.status(500).json({ message: 'Error processing USD withdrawal', error });
+  }
+}
+
+async function getKesWithdrawalRequests(req: Request, res: Response) {
+  try {
+    const { status, page, limit } = req.query;
+    const result = await companyServices.getKesWithdrawalRequests({
+      status: status as string,
+      page: page as string,
+      limit: limit as string,
+    });
+    res.status(result.status).json(result);
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching KES withdrawal requests', error });
+  }
+}
+
+// GET /admin/exportFinancials?type=usd_withdrawals|kes_withdrawals|escrow|transactions
+async function exportFinancials(req: Request, res: Response) {
+  try {
+    const type = (req.query.type as string) || 'transactions';
+    const allowed = ['usd_withdrawals', 'kes_withdrawals', 'escrow', 'transactions'];
+    if (!allowed.includes(type)) {
+      return res.status(400).json({ message: `type must be one of: ${allowed.join(', ')}` });
+    }
+    const csv = await companyServices.exportFinancialsCsv(type);
+    if (!csv) return res.status(500).json({ message: 'Export failed' });
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="${type}_${Date.now()}.csv"`);
+    res.status(200).send(csv);
+  } catch (error) {
+    res.status(500).json({ message: 'Error exporting financials', error });
   }
 }
 
@@ -226,15 +274,41 @@ async function getFinancialDashboard(req: Request, res: Response) {
 
 async function getCommunityFeed(req: Request, res: Response) {
   try {
-    const { page, limit } = req.query;
+    const { page, limit, type } = req.query;
     const Activities = require('../models/activities.model').default;
     const result = await new Activities().getCommunityFeed({
-      page: page as string,
+      page:  page  as string,
       limit: limit as string,
+      type:  type  as string,
     });
     res.status(result.status).json(result);
   } catch (error) {
     res.status(500).json({ message: 'Error fetching community feed', error });
+  }
+}
+
+async function createAnnouncement(req: Request, res: Response) {
+  try {
+    const adminUserId = (req as any).user?.userId || (req as any).user?.user_id;
+    const { title, description, category, image_url, country } = req.body;
+    const Activities = require('../models/activities.model').default;
+    const result = await new Activities().createAnnouncement({
+      adminUserId, title, description, category, image_url, country,
+    });
+    res.status(result.status).json(result);
+  } catch (error) {
+    res.status(500).json({ message: 'Error creating announcement', error });
+  }
+}
+
+async function deleteCommunityPost(req: Request, res: Response) {
+  try {
+    const { id } = req.params;
+    const Activities = require('../models/activities.model').default;
+    const result = await new Activities().deleteCommunityPost(id);
+    res.status(result.status).json(result);
+  } catch (error) {
+    res.status(500).json({ message: 'Error deleting post', error });
   }
 }
 

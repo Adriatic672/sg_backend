@@ -2,6 +2,11 @@ import express, { Request, Response } from 'express';
 import Payments from '../models/wallet.model';
 import { JWTMiddleware } from '../helpers/jwt.middleware';
 import bodyParser from 'body-parser';
+import { financialLimiter } from '../helpers/rateLimiter';
+import { validate } from '../helpers/validate';
+import { idempotencyCheck } from '../helpers/idempotency';
+import { checkFinancialAlert } from '../helpers/financialAlerts';
+import { kesWithdrawSchema, withdrawRequestSchema, transferRequestSchema } from '../helpers/validators/financial.validators';
 
 const router = express.Router();
 const pay = new Payments();
@@ -28,7 +33,7 @@ router.post('/webhook_rel', webhookRel);
 router.get('/getBalance', applyJWTConditionally, logCount, getBalance);
 router.post('/accountStatement', applyJWTConditionally, accountStatement);
 router.post('/depositRequest', applyJWTConditionally, depositRequest);
-router.post('/transferRequest', applyJWTConditionally,logCount, transferRequest);
+router.post('/transferRequest', applyJWTConditionally, financialLimiter, logCount, validate(transferRequestSchema), transferRequest);
 router.get('/getWallets', applyJWTConditionally, getWallets);
 router.get('/getWalletByUserName/:id', applyJWTConditionally, getWalletByUserName);
 router.get('/getPaymentTypes', applyJWTConditionally, getPaymentTypes);
@@ -41,7 +46,9 @@ router.get('/deletePaymentMethod/:id', applyJWTConditionally, deletePaymentMetho
 
 router.post('/validatAccount', applyJWTConditionally, validateUserAccount);
 router.post('/setTransactionPin', applyJWTConditionally, setTransactionPin);
-router.post('/withdrawRequest', applyJWTConditionally, withdrawRequest);
+router.post('/withdrawRequest', applyJWTConditionally, financialLimiter, idempotencyCheck('USD_WITHDRAWAL'), validate(withdrawRequestSchema), withdrawRequest);
+router.post('/kesWithdraw',     applyJWTConditionally, financialLimiter, idempotencyCheck('KES_WITHDRAWAL'), validate(kesWithdrawSchema),     kesWithdraw);
+router.get('/myKesWithdrawals', applyJWTConditionally, getMyKesWithdrawals);
 router.post('/resetTransactionPin', applyJWTConditionally, resetTransactionPin);
 router.post('/getExchangeRate', applyJWTConditionally, getExchangeRate);
 router.get('/getTransactionById/:id', getTransactionById);
@@ -75,6 +82,41 @@ async function withdrawRequest(req: Request, res: Response) {
     res.status(500).json({ message: 'Error processing withdrawal request', error });
   }
 }
+// POST /wallet/kesWithdraw
+// Body: { amount: number, msisdn: string, pin: string }
+// Withdraws from the creator's KES balance_available via M-Pesa B2C.
+async function kesWithdraw(req: Request, res: Response) {
+  try {
+    const userId = (req as any).user?.userId || (req as any).user?.user_id || req.body.userId;
+    if (!userId) return res.status(401).json({ status: 401, message: 'Unauthorized' });
+
+    pay.logOperation('KES_WITHDRAW_REQUEST', userId, 'KES', req.body);
+    const result = await pay.kesWithdraw({ ...req.body, userId });
+    pay.logOperation('KES_WITHDRAW_RESPONSE', userId, 'KES', result);
+
+    if (result.status === 200) {
+      checkFinancialAlert({ userId, operation: 'KES_WITHDRAWAL', amount: req.body.amount, currency: 'KES' });
+    }
+
+    res.status(result.status).json(result);
+  } catch (error) {
+    res.status(500).json({ message: 'Error processing KES withdrawal', error });
+  }
+}
+
+// GET /wallet/myKesWithdrawals
+// Returns the authenticated creator's KES withdrawal history.
+async function getMyKesWithdrawals(req: Request, res: Response) {
+  try {
+    const userId = (req as any).user?.userId || (req as any).user?.user_id;
+    if (!userId) return res.status(401).json({ status: 401, message: 'Unauthorized' });
+    const result = await pay.getMyKesWithdrawals(userId);
+    res.status(result.status).json(result);
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching KES withdrawals', error });
+  }
+}
+
 async function getExchangeRate(req: Request, res: Response) {
   try {
     const result = await pay.getExchangeRate(req.body);

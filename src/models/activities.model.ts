@@ -1,4 +1,4 @@
-import { createItem, getAllItems, updateItem, getItemByFields, queryItems } from "../helpers/dynamodb.helper";
+import { createItem, getAllItems, updateItem, getItemByFields, queryItems, getItemById, deleteItem } from "../helpers/dynamodb.helper";
 import { ActivityNews, Video } from "../interfaces/dynamodb.interfaces";
 import Model from "../helpers/model";
 import NewsStream from "../helpers/NewsStream";
@@ -762,10 +762,111 @@ class Activities extends Model {
    * Each item in the feed carries a `type` discriminator so the frontend can
    * render it with the correct card component.
    */
-  async getCommunityFeed(params: { page?: string; limit?: string } = {}) {
+  async createCommunityPost(data: {
+    userId: string;
+    username: string;
+    text: string;
+    images?: string[];
+  }) {
+    try {
+      const { userId, username, text, images } = data;
+      if (!text || text.trim().length === 0) {
+        return this.makeResponse(400, 'Post text is required');
+      }
+      if (text.trim().length > 2000) {
+        return this.makeResponse(400, 'Post text must be 2000 characters or less');
+      }
+
+      const post_id = `post_${this.getRandomString()}`;
+      const now = new Date().toISOString();
+
+      const item = {
+        post_id,
+        user_id: userId,
+        username,
+        text: text.trim(),
+        likes: 0,
+        comments: 0,
+        views: 0,
+        status: 'active',
+        images: images || [],
+        created_at: now,
+      };
+
+      await createItem('posts', 'post_id', item);
+      logger.info('Community post created', { post_id, userId });
+      return this.makeResponse(201, 'Post created successfully', item);
+    } catch (error) {
+      logger.error('createCommunityPost error:', error);
+      return this.makeResponse(500, 'Error creating post');
+    }
+  }
+
+  async createAnnouncement(data: {
+    adminUserId: string;
+    title: string;
+    description: string;
+    category?: string;
+    image_url?: string;
+    country?: string;
+  }) {
+    try {
+      const { adminUserId, title, description, category, image_url, country } = data;
+      if (!title || !description) {
+        return this.makeResponse(400, 'Title and description are required');
+      }
+
+      const news_id = `ann_${this.getRandomString()}`;
+      const now = new Date().toISOString();
+
+      const item = {
+        news_id,
+        title,
+        description,
+        content: description,
+        category: category || 'general',
+        country: country || 'global',
+        author: adminUserId,
+        image_url: image_url || null,
+        news_url: '',
+        source: { id: 'admin', name: 'SocialGems Admin' },
+        status: 'approved',
+        published_at: now,
+        created_at: now,
+        created_by: adminUserId,
+        approved_by: adminUserId,
+        ttl: null,
+      };
+
+      await createItem('ActivityNews', 'news_id', item);
+      logger.info('Announcement created', { news_id, adminUserId });
+      return this.makeResponse(201, 'Announcement created successfully', item);
+    } catch (error) {
+      logger.error('createAnnouncement error:', error);
+      return this.makeResponse(500, 'Error creating announcement');
+    }
+  }
+
+  async deleteCommunityPost(post_id: string) {
+    try {
+      const existing: any = await getItemById('posts', 'post_id', post_id);
+      if (!existing) {
+        return this.makeResponse(404, 'Post not found');
+      }
+      await updateItem('posts', 'post_id', post_id, { status: 'deleted' });
+      logger.info('Community post deleted', { post_id });
+      return this.makeResponse(200, 'Post removed successfully');
+    } catch (error) {
+      logger.error('deleteCommunityPost error:', error);
+      return this.makeResponse(500, 'Error deleting post');
+    }
+  }
+
+  async getCommunityFeed(params: { page?: string; limit?: string; type?: string } = {}) {
     try {
       const pageNum  = Math.max(1, parseInt(params.page  || '1'));
       const limitNum = Math.min(50,  Math.max(1, parseInt(params.limit || '20')));
+      const typeFilter = params.type || null;
 
       // 1. Announcements — approved news items from DynamoDB
       let announcements: any[] = [];
@@ -833,13 +934,23 @@ class Activities extends Model {
         logger.warn('getCommunityFeed: could not fetch discussions', e);
       }
 
-      // Merge all sections, sort by created_at descending, then paginate.
-      const allItems = [...announcements, ...jobHighlights, ...successPosts, ...discussions]
-        .sort((a: any, b: any) => {
-          const ta = new Date(a.created_at || a.published_at || 0).getTime();
-          const tb = new Date(b.created_at || b.published_at || 0).getTime();
-          return tb - ta;
-        });
+      // Apply type filter if requested, otherwise merge all sections.
+      const typeMap: Record<string, any[]> = {
+        announcement:  announcements,
+        job_highlight: jobHighlights,
+        success_post:  successPosts,
+        discussion:    discussions,
+      };
+
+      const merged = typeFilter && typeMap[typeFilter]
+        ? typeMap[typeFilter]
+        : [...announcements, ...jobHighlights, ...successPosts, ...discussions];
+
+      const allItems = merged.sort((a: any, b: any) => {
+        const ta = new Date(a.created_at || a.published_at || 0).getTime();
+        const tb = new Date(b.created_at || b.published_at || 0).getTime();
+        return tb - ta;
+      });
 
       const total     = allItems.length;
       const offset    = (pageNum - 1) * limitNum;

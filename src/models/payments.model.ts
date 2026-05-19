@@ -363,7 +363,7 @@ export default class Payments extends Model {
 
   async cancelSubscription(userId: string) {
     const userRows: any = await this.callQuerySafe(
-      SELECT stripe_customer_id FROM users WHERE user_id = ''
+      `SELECT stripe_customer_id FROM users WHERE user_id = '${userId}'`
     );
     if (!userRows || userRows.length === 0) {
       return this.makeResponse(400, 'User not found');

@@ -93,7 +93,9 @@ class Accounts extends Model {
 
   async getInfluencerDetails(userId: any) {
     const response: any = await this.callQuerySafe(`
-      SELECT * FROM users_profile where user_id = '${userId}'
+      SELECT p.*, p.subscription_badge
+      FROM users_profile p
+      WHERE p.user_id = '${userId}'
     `);
     console.log("response", response);
     if (response.length == 0) {
@@ -136,7 +138,8 @@ class Accounts extends Model {
       socialStats,
       about: response[0].bio,
       location: response[0].iso_code,
-      reviews: reviews
+      reviews: reviews,
+      subscriptionBadge: response[0].subscription_badge || "none"
     }
     return this.makeResponse(200, "success", profileInfo);
   }
@@ -1803,7 +1806,20 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
 
 
   async getUsersbyType(userType: string) {
-    const existingUsersPhone = await this.callQuerySafe(`select p.*, l.*, u.user_type from users_profile p INNER JOIN users u ON p.user_id=u.user_id inner join levels l on u.level_id=l.id where u.user_type='${userType}'  order by level_id desc LIMIT 200`);
+    const existingUsersPhone = await this.callQuerySafe(`
+      SELECT p.*, l.*, u.user_type, u.subscription_tier,
+        CASE u.subscription_tier
+          WHEN 'pro'  THEN 3
+          WHEN 'plus' THEN 2
+          ELSE 1
+        END AS tier_rank
+      FROM users_profile p
+      INNER JOIN users u ON p.user_id = u.user_id
+      INNER JOIN levels l ON u.level_id = l.id
+      WHERE u.user_type = '${userType}'
+      ORDER BY tier_rank DESC, level_id DESC
+      LIMIT 200
+    `);
     return this.makeResponse(200, "Success", existingUsersPhone);
   }
   async leaderBoard() {

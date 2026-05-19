@@ -1,5 +1,6 @@
 import Model from "../helpers/model";
 import { subscribeToTopic, unsubscribeFromTopic } from '../helpers/FCM';
+import { getUserTier, tierAtLeast } from '../helpers/subscriptionTier';
 import { getItem, setItem } from "../helpers/connectRedis";
 import { calculateWeightedScore } from "../helpers/campaign.helper";
 import * as crypto from 'crypto';
@@ -161,6 +162,21 @@ export default class Campaigns extends Model {
 
   async submitApplication(data: any) {
     const { userId, campaign_id } = data;
+
+    // Enforce tier-based campaign access before allowing the application
+    const campaignRows: any = await this.callQuerySafe(
+      `SELECT access_tier FROM act_campaigns WHERE campaign_id = '${campaign_id}' LIMIT 1`
+    );
+    if (campaignRows && campaignRows.length > 0) {
+      const requiredTier = campaignRows[0].access_tier || 'free';
+      if (requiredTier !== 'free') {
+        const userTier = await getUserTier(userId);
+        if (!tierAtLeast(userTier, requiredTier as any)) {
+          return this.makeResponse(403, `This campaign requires a Creator ${requiredTier === 'pro' ? 'Pro' : 'Plus'} subscription`);
+        }
+      }
+    }
+
     const response = await this.callQuerySafe(`
       UPDATE act_campaign_invites
       SET invite_status = 'accepted',
@@ -891,14 +907,32 @@ WHERE i.user_id = '${userId}' AND i.invite_status = '${status}' AND i.applicatio
   }
 
   async exploreCampaigns(userId: string, earningType?: string) {
+    const userTier = await getUserTier(userId);
     const earningFilter = earningType
       ? `AND c.earning_type = '${earningType}'`
       : '';
+
+    // Tier access filter: free users cannot see 'plus' or 'pro' campaigns;
+    // plus users cannot see 'pro' campaigns.
+    let tierFilter = `AND c.access_tier = 'free'`;
+    if (userTier === 'pro') {
+      tierFilter = ``;
+    } else if (userTier === 'plus') {
+      tierFilter = `AND c.access_tier IN ('free', 'plus')`;
+    }
+
+    // Early access: paid users see campaigns within their early_access_hours window
+    // before the campaign becomes available to free users.
+    let earlyAccessFilter = ``;
+    if (userTier === 'pro' || userTier === 'plus') {
+      earlyAccessFilter = `OR (c.early_access_hours > 0 AND c.status = 'active' AND DATE_ADD(c.created_on, INTERVAL c.early_access_hours HOUR) > NOW())`;
+    }
+
     const response = await this.callQuerySafe(`
       SELECT
         c.campaign_id, c.title, c.description, c.objective, c.image_urls,
         c.start_date, c.end_date, c.status, c.budget, c.number_of_influencers,
-        c.earning_type, c.affiliate_link,
+        c.earning_type, c.affiliate_link, c.access_tier, c.early_access_hours,
         p.name AS brand_name, p.logo AS brand_logo,
         CASE WHEN c.status = 'open_to_applications' THEN 1 ELSE 0 END AS is_open,
         CASE WHEN i.invite_id IS NOT NULL THEN 1 ELSE 0 END AS is_invited,
@@ -910,6 +944,8 @@ WHERE i.user_id = '${userId}' AND i.invite_status = '${status}' AND i.applicatio
       LEFT JOIN act_campaign_invites i ON c.campaign_id = i.campaign_id AND i.user_id = '${userId}'
       WHERE c.status IN ('active', 'open_to_applications')
       ${earningFilter}
+      ${tierFilter}
+      ${earlyAccessFilter}
       ORDER BY c.created_on DESC
     `);
     return this.makeResponse(200, "success", response);

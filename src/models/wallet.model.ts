@@ -2,6 +2,7 @@ import Model from "../helpers/model";
 import { subscribeToTopic, unsubscribeFromTopic } from '../helpers/FCM';
 import { getItem, setItem } from "../helpers/connectRedis";
 import Stripe from 'stripe';
+import { getUserTier } from '../helpers/subscriptionTier';
 import RelworxMobileMoney from "../thirdparty/Relworx";
 import crypto from 'crypto';
 import { logger } from '../utils/logger';
@@ -1082,8 +1083,13 @@ export default class Payments extends Model {
       const refId = `r${this.getRandomString()}`
       const trans_id = `t${this.getRandomString()}`
 
+      // Reduced withdrawal fee for Creator Pro (1.5%) vs standard (3%)
+      const userTier = await getUserTier(userId);
+      const feeRate = userTier === 'pro' ? 0.015 : 0.03;
+      const withdrawalFee = parseFloat((amount * feeRate).toFixed(2));
+
       const userWalletId = creditWallet.wallet_id
-      const transferObj = await this.walletTransfer(trans_id, userId, crWalletId, "WITHDRAW", amount, 0, currency, narration, userWalletId, refId, paymentType, account_number, account_name);
+      const transferObj = await this.walletTransfer(trans_id, userId, crWalletId, "WITHDRAW", amount, withdrawalFee, currency, narration, userWalletId, refId, paymentType, account_number, account_name);
       const status = transferObj.status
       if (status != 200) {
         const message = transferObj.message
@@ -1274,6 +1280,16 @@ export default class Payments extends Model {
     const request_id = `kwr${this.getRandomString()}`;
     const trans_id   = `t${this.getRandomString()}`;
 
+    // Reduced fee for Creator Pro (1.5%) vs standard (3%)
+    const userTier = await getUserTier(userId);
+    const feeRate = userTier === 'pro' ? 0.015 : 0.03;
+    const withdrawalFee = parseFloat((amount * feeRate).toFixed(2));
+    const totalDeduct = parseFloat((amount + withdrawalFee).toFixed(2));
+
+    if (available < totalDeduct) {
+      return this.makeResponse(400, `Insufficient available balance (including ${(feeRate * 100).toFixed(1)}% fee). Available: KES ${available.toFixed(2)}`);
+    }
+
     await this.callQuerySafe(
       `UPDATE user_wallets
        SET balance_available = balance_available - ?,
@@ -1281,7 +1297,7 @@ export default class Payments extends Model {
            total_withdrawn   = total_withdrawn + ?,
            updated_at        = NOW()
        WHERE user_id = ? AND asset = 'KES' AND balance_available >= ?`,
-      [amount, amount, amount, userId, amount]
+      [totalDeduct, totalDeduct, totalDeduct, userId, totalDeduct]
     );
 
     // Confirm the update actually applied (another request may have raced).
@@ -1309,7 +1325,7 @@ export default class Payments extends Model {
     try {
       await this.walletTransfer(
         trans_id, userId, 'MPESA_B2C', 'WITHDRAW',
-        amount, 0, 'KES', 'M-Pesa withdrawal', wallet_id, request_id,
+        amount, withdrawalFee, 'KES', 'M-Pesa withdrawal', wallet_id, request_id,
         'MOBILE', phone, ''
       );
     } catch (_) {

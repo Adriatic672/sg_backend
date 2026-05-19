@@ -1,8 +1,9 @@
-import Model from "../helpers/model";
+﻿import Model from "../helpers/model";
 import { subscribeToTopic, unsubscribeFromTopic } from '../helpers/FCM';
 import { setItem } from "../helpers/connectRedis";
 import Stripe from 'stripe';
 import { logger } from '../utils/logger';
+import { setUserTier } from '../helpers/subscriptionTier';
 
 let _stripe: Stripe | null = null;
 function getStripe(): Stripe {
@@ -175,33 +176,52 @@ export default class Payments extends Model {
         case "checkout.session.completed": {
           const session = event.data.object as Stripe.Checkout.Session;
 
-          // Access metadata, userId, and subTag from the session
           const userId = session.metadata?.userId || "";
           const subTag = session.metadata?.subTag || "";
           const opType = session.metadata?.opType || "";
           const refId = session.metadata?.refId || "";
 
- 
           logger.info(`SESSION_PRO Metadata:`, session.metadata);
 
-          // Retrieve the payment intent ID
-          const paymentIntentId = session.payment_intent as string;
-
-          logger.info(`Checkout session completed. Payment Intent: ${paymentIntentId}`);
-
-          // Fetch the Payment Intent details
-          const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
-
-          if (paymentIntent.status === "succeeded") {
-            // Credit the user in your system
-            if (opType === "Payment") {
-              await this.completePendingDeposit(refId, paymentIntent.amount / 100,"success");
-            } else {
-              await this.creditUserAccount(userId, paymentIntent.amount / 100, subTag);
+          if (session.mode === "subscription" && userId) {
+            // Activate the creator's subscription tier
+            const tier = subTag === "CREATOR_PRO" ? "pro" : subTag === "CREATOR_PLUS" ? "plus" : null;
+            if (tier) {
+              const subInfo: any = await this.getSubscription(subTag);
+              if (subInfo.length > 0) {
+                await this.updateData(
+                  "user_subscriptions",
+                  `user_id='${userId}' AND subscription_id=${subInfo[0].id}`,
+                  { status: "active", updated_at: new Date().toISOString() }
+                );
+              }
+              await setUserTier(userId, tier);
+              logger.info(`User ${userId} activated tier: ${tier}`);
             }
-            logger.info(`User ${userId} credited with ${paymentIntent.amount / 100}`);
+          } else {
+            // One-off payment flow
+            const paymentIntentId = session.payment_intent as string;
+            logger.info(`Checkout session completed. Payment Intent: ${paymentIntentId}`);
+            const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+            if (paymentIntent.status === "succeeded") {
+              if (opType === "Payment") {
+                await this.completePendingDeposit(refId, paymentIntent.amount / 100, "success");
+              } else {
+                await this.creditUserAccount(userId, paymentIntent.amount / 100, subTag);
+              }
+              logger.info(`User ${userId} credited with ${paymentIntent.amount / 100}`);
+            }
+          }
+          break;
+        }
 
-
+        case "customer.subscription.deleted": {
+          // Subscription cancelled â€” downgrade user to free
+          const sub = event.data.object as Stripe.Subscription;
+          const userRows: any = await this.findUserByStripeCustomerId(sub.customer as string);
+          if (userRows && userRows.length > 0) {
+            await setUserTier(userRows[0].user_id, "free");
+            logger.info(`User ${userRows[0].user_id} downgraded to free (subscription cancelled)`);
           }
           break;
         }
@@ -325,9 +345,44 @@ export default class Payments extends Model {
       return this.makeResponse(500, 'Error creating checkout session', { error: error.message });
     }
   }
+  async getMySubscription(userId: string) {
+    const rows: any = await this.callQuerySafe(`
+      SELECT us.id, us.status, us.start_date, us.auto_renew, us.created_at, us.updated_at,
+             s.name, s.description, s.price, s.currency, s.sub_tag, s.features
+      FROM user_subscriptions us
+      JOIN subscriptions s ON us.subscription_id = s.id
+      WHERE us.user_id = '${userId}' AND us.status = 'active'
+      ORDER BY us.created_at DESC
+      LIMIT 1
+    `);
+    if (!rows || rows.length === 0) {
+      return this.makeResponse(200, 'No active subscription', null);
+    }
+    return this.makeResponse(200, 'Subscription retrieved', rows[0]);
+  }
 
-
-
-
-
+  async cancelSubscription(userId: string) {
+    const userRows: any = await this.callQuerySafe(
+      SELECT stripe_customer_id FROM users WHERE user_id = ''
+    );
+    if (!userRows || userRows.length === 0) {
+      return this.makeResponse(400, 'User not found');
+    }
+    const customerId = userRows[0].stripe_customer_id;
+    if (!customerId) {
+      return this.makeResponse(400, 'No Stripe account linked to this user');
+    }
+    const subscriptions = await stripe.subscriptions.list({
+      customer: customerId,
+      status: 'active',
+      limit: 1,
+    });
+    if (subscriptions.data.length === 0) {
+      return this.makeResponse(400, 'No active subscription to cancel');
+    }
+    await stripe.subscriptions.update(subscriptions.data[0].id, {
+      cancel_at_period_end: true,
+    });
+    return this.makeResponse(200, 'Subscription will be cancelled at the end of the current billing period');
+  }
 }

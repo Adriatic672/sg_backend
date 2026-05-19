@@ -1,4 +1,4 @@
-import Model from "../helpers/model";
+﻿import Model from "../helpers/model";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import { OAuth2Client } from 'google-auth-library';
@@ -714,8 +714,30 @@ INNER JOIN users_profile p ON u.user_id = p.user_id`);
   }
 
   async getCampaigns() {
-    return await this.callQuerySafe(`SELECT * FROM act_campaigns c inner join business_profile p on c.created_by=p.business_id where c.status!='draft' ORDER BY c.created_on DESC`);
+    return await this.callQuerySafe(`SELECT c.*, p.name AS brand_name, c.access_tier, c.early_access_hours FROM act_campaigns c INNER JOIN business_profile p ON c.created_by = p.business_id WHERE c.status != 'draft' ORDER BY c.created_on DESC`);
   }
+
+  async updateCampaignAccessTier(campaignId: string, accessTier: string, earlyAccessHours: number) {
+    const allowed = ['free', 'plus', 'pro'];
+    if (!allowed.includes(accessTier)) {
+      return this.makeResponse(400, 'Invalid access tier. Must be free, plus, or pro');
+    }
+    if (typeof earlyAccessHours !== 'number' || earlyAccessHours < 0) {
+      return this.makeResponse(400, 'early_access_hours must be a non-negative number');
+    }
+    const campaign: any = await this.callQuerySafe(
+      `SELECT campaign_id FROM act_campaigns WHERE campaign_id = '${campaignId}'`
+    );
+    if (!campaign || campaign.length === 0) {
+      return this.makeResponse(404, 'Campaign not found');
+    }
+    await this.updateData('act_campaigns', `campaign_id = '${campaignId}'`, {
+      access_tier: accessTier,
+      early_access_hours: earlyAccessHours,
+    });
+    return this.makeResponse(200, 'Campaign access tier updated successfully');
+  }
+
   async getNotificationTemplates() {
     return await this.callQuerySafe(`SELECT * FROM notification_templates`);
   }
@@ -1043,7 +1065,7 @@ COALESCE(p.username, 'admin') AS username,
           FROM user_wallets WHERE wallet_id = '${escrowWalletId}'
         `),
 
-        // 2. KES & USD liability — sum of all creator/brand wallet balances
+        // 2. KES & USD liability â€” sum of all creator/brand wallet balances
         this.callQuerySafe(`
           SELECT asset,
             COALESCE(SUM(balance), 0)           AS total_balance,
@@ -1321,7 +1343,7 @@ COALESCE(p.username, 'admin') AS username,
   }
 
   // ---------------------------------------------------------------------------
-  // KES B2C withdrawal — admin view (read-only; payouts are automated)
+  // KES B2C withdrawal â€” admin view (read-only; payouts are automated)
   // ---------------------------------------------------------------------------
 
   async getKesWithdrawalRequests(params: {
@@ -1418,7 +1440,7 @@ COALESCE(p.username, 'admin') AS username,
   }
 
   // ---------------------------------------------------------------------------
-  // USD Withdrawal — admin approval queue
+  // USD Withdrawal â€” admin approval queue
   // ---------------------------------------------------------------------------
 
   async getUsdWithdrawalRequests(params: {
@@ -1518,7 +1540,7 @@ COALESCE(p.username, 'admin') AS username,
         if (origTx.length > 0) {
           const tx           = origTx[0];
           const reversalId   = `t${this.getRandomString()}`;
-          // Swap dr ↔ cr: the receiving side (cr) now funds the reversal back to creator (dr).
+          // Swap dr â†” cr: the receiving side (cr) now funds the reversal back to creator (dr).
           const reversalResult = await this.walletTransfer(
             reversalId,
             tx.user_id,
@@ -1527,7 +1549,7 @@ COALESCE(p.username, 'admin') AS username,
             parseFloat(tx.amount),
             0,
             tx.currency,
-            'USD withdrawal reversal — admin rejected',
+            'USD withdrawal reversal â€” admin rejected',
             tx.cr_wallet_id,   // debit: the counterparty wallet (escrow/admin)
             reversalId,
           );
@@ -1538,7 +1560,7 @@ COALESCE(p.username, 'admin') AS username,
           // Mark original transaction as reversed.
           await this.callQuerySafe(`
             UPDATE wl_transactions
-            SET status = 'FAILED', system_status = 'REVERSED', message = 'Admin rejected — reversed'
+            SET status = 'FAILED', system_status = 'REVERSED', message = 'Admin rejected â€” reversed'
             WHERE trans_id = '${req.trans_id}'
           `);
         }
@@ -1617,7 +1639,7 @@ COALESCE(p.username, 'admin') AS username,
       }
     }
 
-    const resp: any = await this.callQuerySafe(`select p.*,u.email,u.level_id, u.is_social_verified from users u inner join users_profile p on u.user_id = p.user_id where user_type ='${usertype}' ${ext} order by u.id desc `)
+    const resp: any = await this.callQuerySafe(`select p.*,u.email,u.level_id,u.is_social_verified,u.subscription_tier from users u inner join users_profile p on u.user_id = p.user_id where user_type ='${usertype}' ${ext} order by u.subscription_tier DESC, u.id desc `)
 
     for (let i = 0; i < resp.length; i++) {
       const user = resp[i];
@@ -2961,7 +2983,7 @@ COALESCE(p.username, 'admin') AS username,
     );
   }
 
-  // ─── Campaign Manager Assignment ────────────────────────────────────────────
+  // â”€â”€â”€ Campaign Manager Assignment â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   async getCampaignManagers() {
     try {

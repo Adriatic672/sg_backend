@@ -1,4 +1,4 @@
-import express, { Request, Response } from 'express';
+﻿import express, { Request, Response } from 'express';
 import Payments from '../models/payments.model';
 import PaymentConfig from '../models/paymentConfig.model';
 import { JWTMiddleware } from '../helpers/jwt.middleware';
@@ -23,6 +23,8 @@ router.post('/webhook', webhook,   bodyParser.raw({ type: 'application/json' }),
 );
 router.get('/getSubscription/:id', getSubscription);
 router.get('/getSubscriptions', getSubscriptions);
+router.get('/mySubscription', applyJWTConditionally, getMySubscription);
+router.post('/cancelSubscription', applyJWTConditionally, cancelSubscription);
 
 
 
@@ -130,4 +132,25 @@ router.post('/admin/overrideTransaction', applyJWTConditionally, async (req: Req
   }
 });
 
+
+
+async function getMySubscription(req: Request, res: Response) {
+  try {
+    const userId = req.body.userId;
+    const result = await pay.getMySubscription(userId);
+    res.status(result.status).json(result);
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching subscription', error });
+  }
+}
+
+async function cancelSubscription(req: Request, res: Response) {
+  try {
+    const userId = req.body.userId;
+    const result = await pay.cancelSubscription(userId);
+    res.status(result.status).json(result);
+  } catch (error) {
+    res.status(500).json({ message: 'Error cancelling subscription', error });
+  }
+}
 export default router;

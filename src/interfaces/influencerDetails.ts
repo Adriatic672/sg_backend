@@ -54,4 +54,5 @@ export interface InfluencerDetails {
   about: string;
   location: string;
   reviews: Review[];
+  subscriptionBadge?: string;
 } 

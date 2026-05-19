@@ -61,6 +61,7 @@ router.get('/getAdvert/:id', applyJWTConditionally, getAdvertById);
 router.put('/updateAdvert/:id', applyJWTConditionally, updateAdvert);
 router.delete('/deleteAdvert/:id', applyJWTConditionally, deleteAdvert);
 router.get('/getCampaigns', applyJWTConditionally, getCampaigns);
+router.patch('/campaigns/:id/access-tier', applyJWTConditionally, updateCampaignAccessTier);
 router.get('/getWalletTransactions', applyJWTConditionally, getWalletTransactions);
 router.get('/getGroups', applyJWTConditionally, getGroups);
 router.get('/getUserWallet/:id', applyJWTConditionally, getUserWallet);
@@ -821,7 +822,16 @@ async function getCampaigns(req: Request, res: Response) {
   }
 }
 
-
+async function updateCampaignAccessTier(req: Request, res: Response) {
+  try {
+    const { id } = req.params;
+    const { access_tier, early_access_hours } = req.body;
+    const result = await companyServices.updateCampaignAccessTier(id, access_tier, Number(early_access_hours ?? 0));
+    res.status(result.status).json(result);
+  } catch (error) {
+    res.status(500).json({ message: 'Error updating campaign access tier', error });
+  }
+}
 
 async function getWalletStats(req: Request, res: Response) {
   try {

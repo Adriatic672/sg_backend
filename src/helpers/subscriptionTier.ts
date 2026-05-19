@@ -1,4 +1,4 @@
-import BaseModel from '../models/base.model';
+import Model from './model';
 
 export type SubscriptionTier = 'free' | 'plus' | 'pro';
 
@@ -8,7 +8,7 @@ export function tierAtLeast(userTier: SubscriptionTier, required: SubscriptionTi
   return tierRank[userTier] >= tierRank[required];
 }
 
-class TierResolver extends BaseModel {}
+class TierResolver extends Model {}
 const resolver = new TierResolver();
 
 /**

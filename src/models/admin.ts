@@ -857,75 +857,12 @@ INNER JOIN users_profile p ON u.user_id = p.user_id`);
     }
   }
 
-      const userRole = adminRole[0].role
-
-      if (process.env.TABLE_IDENTIFIER != 'stage') {
-        if (userRole != 'SUPER_ADMIN') {
-          return this.makeResponse(400, "You are not allowed to delete accounts in this environment");
-        }
-
-        if (!reason.includes("requested")) {
-          return this.makeResponse(400, "Please enter a valid reason");
-        }
-      }
-
-      // Check if user exists
-      const userInfo: any = await this.callQuerySafe(`select * from users where user_id=?`, [influencer_id])
-      if (userInfo.length == 0) {
-        return this.makeResponse(404, "User not found");
-      }
-
-      // Create maker-checker request instead of direct deletion
-      const requestData = {
-        influencer_id,
-        userId,
-        role,
-        reason,
-        userInfo: userInfo[0],
-        timestamp: new Date().toISOString()
-      };
-      if (adminRole[0].role == 'SUPER_ADMIN') {
-        return await this.executeDeleteAccount(requestData)
-      }
-
-
-
-      const makerCheckerResult = await makerCheckerHelper.createRequest(
-        'DELETE',
-        'users', // Primary table
-        influencer_id,
-        userId,
-        requestData,
-        1 // Require 1 approver
-      );
-
-      if (makerCheckerResult.status === 200) {
-        return this.makeResponse(202, "Delete account request submitted for approval", {
-          request_id: makerCheckerResult.data.request_id,
-          message: "Your request to delete this account has been submitted and is pending approval."
-        });
-      } else {
-        return this.makeResponse(500, "Failed to create approval request", makerCheckerResult);
-      }
-    } catch (error: any) {
-      logger.error("Error creating maker-checker request for deleteAccount:", error);
-      logger.error("Delete account error details:", {
-        influencer_id,
-        userId,
-        role,
-        reason,
-        error_message: error?.message,
-        error_stack: error?.stack
-      });
-      return this.makeResponse(500, "Error creating approval request");
-    }
-  }
-
   /**
    * Execute approved delete account request
    * This function is called when a maker-checker request is approved
    */
   async executeDeleteAccount(requestData: any) {
+
     console.log("executeDeleteAccount", requestData)
     const { influencer_id, userId, reason, userInfo } = requestData;
 

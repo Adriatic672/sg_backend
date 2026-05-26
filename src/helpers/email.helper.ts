@@ -5,19 +5,19 @@ export default class EmailSender {
     private transporter: Transporter | null = null;
 
     constructor() {
-        const host = process.env.SMTP_HOST;
-        const user = process.env.MAILGUN_SMTP_USER || process.env.SMTP_USER;
-        const pass = process.env.MAILGUN_SMTP_PASSWORD || process.env.SMTP_PASS;
+        const host = process.env.SMTP_HOST || 'mail.smtp2go.com';
         const port = Number(process.env.SMTP_PORT) || 2525;
+        const user = process.env.SMTP_USER;
+        const pass = process.env.SMTP_PASS;
 
         if (host && user && pass) {
             this.transporter = nodemailer.createTransport({
                 host,
                 port,
                 secure: false,
-                requireTLS: false,
+                requireTLS: true,
                 auth: { user, pass },
-                logger: true,
+                logger: process.env.NODE_ENV !== 'production',
             });
         }
     }
@@ -37,7 +37,7 @@ export default class EmailSender {
         }
 
         const mailOptions: SendMailOptions = {
-            from: `Social Gems <${process.env.MAILGUN_SMTP_FROM || 'you@yourdomain.com'}>`, // Specify the sender's name and email
+            from: `Social Gems <${process.env.SMTP_FROM || 'no-reply@socialgems.me'}>`,
             to,
             subject: envSubject,
             html,

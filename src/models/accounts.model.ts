@@ -1561,8 +1561,15 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
       console.log("sendEmailOTP", data)
       const { email } = data;
       const otp = await this.getOTP(email);
-      this.sendEmail("RESET_PASSWORD_REQUEST", email, "", otp);
-      return this.makeResponse(200, "OTP sent successfully");
+
+      const emailResult = await this.sendEmail("RESET_PASSWORD_REQUEST", email, "", otp);
+
+      if (emailResult && emailResult.status === 200) {
+        return this.makeResponse(200, "OTP sent successfully");
+      } else {
+        console.error("Email sending failed for OTP:", emailResult);
+        return this.makeResponse(500, "Failed to send OTP email");
+      }
     } catch (err) {
       logger.info(err);
       return this.makeResponse(500, "Error processing request");

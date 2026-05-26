@@ -373,18 +373,15 @@ export default class Model extends BaseModel {
 
     async sendEmail(operation: string, email: string, name = "", otp = "", tableData: any = [], code: string = '') {
         try {
-            //return true;
             const messageBody = await this.selectDataQuery("notification_templates", `operation = '${operation}'`);
-            console.log(`messageBody`, messageBody)
+            console.log(`messageBody`, messageBody);
+
             if (messageBody.length == 0) {
-                console.log(`EMAIL_MESSAGE-1`, email)
+                console.log(`EMAIL_MESSAGE-1 - Template not found for operation:`, operation);
                 return this.makeResponse(404, "operation not found");
             }
-            console.log(`EMAIL_MESSAGE-2`, email)
 
-            // Start of the unordered list
             let listHtml = "<ul>";
-            // Assuming tableData is an array of objects
             (Array.isArray(tableData) ? tableData : []).forEach((item: any) => {
                 listHtml += `<li>${item}</li>`;
             });
@@ -392,16 +389,24 @@ export default class Model extends BaseModel {
 
             const message = messageBody[0]['body'];
             const subject = messageBody[0]['title'];
-            console.log(`EMAIL_MESSAGE-3`, email)
 
             const new_message = this.constructSMSMessage(message, name, otp, listHtml, code);
-            console.log(`EMAIL_MESSAGE`, email, new_message)
-            mailer.sendMail(email, subject, subject, new_message);
-            return true;
+            console.log(`EMAIL_MESSAGE - Sending to:`, email);
+
+            // Properly await and check result
+            const emailSent = await mailer.sendMail(email, subject, subject, new_message);
+
+            if (emailSent) {
+                return this.makeResponse(200, "Email sent successfully");
+            } else {
+                console.error("Mailer returned false when sending email to:", email);
+                return this.makeResponse(500, "Failed to send email");
+            }
 
         } catch (error) {
             cloudWatchLogger.error("Error in sendEmail", error, { operation, email, name, otp });
-            return this.makeResponse(203, "Error fetching company");
+            console.error("Exception in sendEmail:", error);
+            return this.makeResponse(500, "Error sending email");
         }
     }
 

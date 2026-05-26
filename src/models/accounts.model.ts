@@ -950,6 +950,21 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
         return this.makeResponse(400, "Email already exists");
       }
 
+      // Allow re-registration for previously hard-deleted accounts
+      const deletedRecord: any = await this.callQuerySafe(
+        `SELECT d.* FROM deleted_users d 
+         LEFT JOIN users u ON d.user_id = u.user_id 
+         WHERE (d.user_id = ? OR EXISTS (SELECT 1 FROM users_profile p WHERE p.user_id = d.user_id AND p.email = ?))
+         AND u.user_id IS NULL
+         LIMIT 1`,
+        [email, email]
+      );
+
+      if (deletedRecord.length > 0) {
+        // Clean up the old deletion record so the email can be re-used
+        await this.callQuerySafe(`DELETE FROM deleted_users WHERE user_id = ?`, [deletedRecord[0].user_id]);
+      }
+
       const hashPassword = this.hashPassword(random_password);
       const newUser = { user_id: userId, business_id: userId, user_type, email, password: hashPassword, status: "active", source };
       await this.insertData("users", newUser);

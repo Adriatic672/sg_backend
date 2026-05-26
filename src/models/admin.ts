@@ -12,6 +12,7 @@ import cloudWatchLogger from "../helpers/cloudwatch.helper";
 import { getItem, setItem } from "../helpers/connectRedis";
 import makerCheckerHelper from "../helpers/makerChecker.helper";
 import bcrypt from 'bcrypt';
+import AuditModel from './audit.model';
 
 const chat = new ChatModel()
 
@@ -781,13 +782,81 @@ INNER JOIN users_profile p ON u.user_id = p.user_id`);
 
   async deleteAccount(data: any) {
     console.log("deleteAccount", data)
-    const { influencer_id, userId, role, reason } = data
+    const { influencer_id, userId, role, reason, adminUserId } = data;
+    const actingAdminId = adminUserId || userId;
+
     try {
       // Validate admin permissions
-      const adminRole = await this.callQuerySafe(`select * from admin_users where user_id=?`, [userId])
+      const adminRole = await this.callQuerySafe(`select * from admin_users where user_id=?`, [actingAdminId])
       if (adminRole.length == 0) {
         return this.makeResponse(400, "You are not allowed to delete accounts in this environment");
       }
+      const userRole = adminRole[0].role;
+
+      const isProduction = process.env.TABLE_IDENTIFIER !== 'stage';
+
+      if (isProduction) {
+        if (userRole !== 'SUPER_ADMIN') {
+          return this.makeResponse(400, "Only SUPER_ADMIN can delete accounts in production");
+        }
+
+        if (!reason || !reason.toLowerCase().includes("requested")) {
+          return this.makeResponse(400, "Reason must include the word 'requested' for audit purposes");
+        }
+      }
+
+      // Check if user exists
+      const userInfo: any = await this.callQuerySafe(`select * from users where user_id=?`, [influencer_id])
+      if (userInfo.length == 0) {
+        return this.makeResponse(404, "User not found");
+      }
+
+      // Create maker-checker request instead of direct deletion
+      const requestData = {
+        influencer_id,
+        userId: actingAdminId,
+        role: role || userRole,
+        reason,
+        userInfo: userInfo[0],
+        timestamp: new Date().toISOString(),
+        adminUserId: actingAdminId
+      };
+
+      if (adminRole[0].role === 'SUPER_ADMIN') {
+        return await this.executeDeleteAccount(requestData);
+      }
+
+      const makerCheckerResult = await makerCheckerHelper.createRequest(
+        'DELETE',
+        'users', // Primary table
+        influencer_id,
+        actingAdminId,
+        requestData,
+        1 // Require 1 approver
+      );
+
+      if (makerCheckerResult.status === 200) {
+        return this.makeResponse(202, "Delete account request submitted for approval", {
+          request_id: makerCheckerResult.data.request_id,
+          message: "Your request to delete this account has been submitted and is pending approval."
+        });
+      } else {
+        return this.makeResponse(500, "Failed to create approval request", makerCheckerResult);
+      }
+    } catch (error: any) {
+      logger.error("Error creating maker-checker request for deleteAccount:", error);
+      logger.error("Delete account error details:", {
+        influencer_id,
+        userId: actingAdminId,
+        role,
+        reason,
+        error_message: error?.message,
+        error_stack: error?.stack
+      });
+      return this.makeResponse(500, "Error creating approval request");
+    }
+  }
+
       const userRole = adminRole[0].role
 
       if (process.env.TABLE_IDENTIFIER != 'stage') {
@@ -986,8 +1055,22 @@ INNER JOIN users_profile p ON u.user_id = p.user_id`);
   }
 
   async activateUser(data: any) {
-    const { userId, user_id } = data
-    await this.updateData("users", `user_id='${user_id}'`, { status: 'active' });
+    const { userId, user_id, adminUserId } = data;
+    const targetUserId = user_id || userId;
+    const actingAdmin = adminUserId || userId;
+
+    if (!targetUserId) {
+      return this.makeResponse(400, "user_id is required");
+    }
+
+    await this.updateData("users", `user_id='${targetUserId}'`, { status: 'active' });
+
+    // Audit log
+    this.logOperation("activateUser", actingAdmin || 'admin', targetUserId, { 
+      target_user: targetUserId, 
+      action: 'admin_activate_user' 
+    });
+
     return this.makeResponse(200, "User activated successfully");
   }
 
@@ -1973,6 +2056,57 @@ COALESCE(p.username, 'admin') AS username,
 
     } catch (error) {
       logger.error("Error in verifyEmail:", error);
+      return this.makeResponse(500, "Error verifying email");
+    }
+  }
+
+  /**
+   * Admin force-verifies a user's email (no OTP required)
+   * This is the safe method for admin panel use.
+   */
+  async forceVerifyEmail(data: any) {
+    try {
+      const { email, adminUserId, userId } = data;
+      const actingAdminId = adminUserId || userId;
+
+      if (!email) {
+        return this.makeResponse(400, "Email is required");
+      }
+
+      const user: any = await this.callQuerySafe(
+        `SELECT user_id, email_verified FROM users WHERE email = ?`,
+        [email]
+      );
+
+      if (user.length === 0) {
+        return this.makeResponse(404, "User not found");
+      }
+
+      if (user[0].email_verified === 'yes') {
+        return this.makeResponse(200, "Email already verified");
+      }
+
+      await this.updateData("users", `email='${email}'`, { email_verified: 'yes' });
+
+      // Log admin action for audit
+      this.logOperation("forceVerifyEmail", actingAdminId || 'admin', email, { email, action: 'admin_force_verify' });
+
+      try {
+        const audit = new AuditModel();
+        await audit.logAdminAction({
+          adminUserId: actingAdminId || 'admin',
+          action: 'force_verify_email',
+          targetType: 'user',
+          targetId: user[0].user_id,
+          details: { email, method: 'admin_force' }
+        });
+      } catch (auditErr) {
+        logger.error('Audit log failed for forceVerifyEmail', auditErr);
+      }
+
+      return this.makeResponse(200, "Email verified successfully by admin");
+    } catch (error) {
+      logger.error("Error in forceVerifyEmail:", error);
       return this.makeResponse(500, "Error verifying email");
     }
   }

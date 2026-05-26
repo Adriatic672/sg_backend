@@ -2,6 +2,7 @@ import express, { Request, Response } from 'express';
 import CompanyServices from '../models/admin';
 import { JWTMiddleware } from '../helpers/jwt.middleware';
 import GemsAI from '../thirdparty/GemsAI';
+import { requirePermission } from '../middleware/rbac.middleware';
 
 const router = express.Router();
 const companyServices = new CompanyServices();
@@ -32,8 +33,9 @@ const requireManagerOrAdmin = (req: Request, res: Response, next: any) => {
 router.post('/login', login);
 router.get('/viewUsers', applyJWTConditionally, viewUsers);
 router.get('/viewBrands', applyJWTConditionally, viewBrands);
-router.post('/deactivateUser', applyJWTConditionally, deleteAccount);
-router.post('/activateUser', applyJWTConditionally, activateUser);
+router.post('/deactivateUser', applyJWTConditionally, requirePermission('users:delete'), deleteAccount);
+router.post('/activateUser', applyJWTConditionally, requirePermission('users:write'), activateUser);
+router.post('/forceVerifyEmail', applyJWTConditionally, requirePermission('users:write'), forceVerifyEmail);
 router.post('/deactivateBrand', applyJWTConditionally, deactivateBrand);
 router.post('/editBrandName', applyJWTConditionally, editBrandName);
 router.get('/viewAdminUsers', applyJWTConditionally, viewAdminUsers);
@@ -923,6 +925,19 @@ async function verifyEmail(req: Request, res: Response) {
     res.status(200).json(result);
   } catch (error) {
     res.status(500).json({ message: 'Error verifying email', error });
+  }
+}
+
+async function forceVerifyEmail(req: Request, res: Response) {
+  try {
+    const adminUserId = (req as any).user?.userId || (req as any).body?.userId;
+    const result = await companyServices.forceVerifyEmail({
+      ...req.body,
+      adminUserId
+    });
+    res.status(result.status || 200).json(result);
+  } catch (error) {
+    res.status(500).json({ message: 'Error force verifying email', error });
   }
 }
 

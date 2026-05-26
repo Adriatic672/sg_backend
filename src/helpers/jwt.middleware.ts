@@ -159,6 +159,13 @@ export class JWTMiddleware {
             req.body.agentId = decoded.agentId;
             req.body.type = decoded.type;
 
+            // Also populate req.user for RBAC middleware compatibility
+            (req as any).user = {
+                user_id: userId,
+                role: decoded.role,
+                username: decoded.username
+            };
+
 
 
             const role = decoded.role

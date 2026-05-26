@@ -2,6 +2,7 @@ import express, { Request, Response } from 'express';
 import * as crypto from 'crypto';
 import Model from "../helpers/model";
 import db from "../helpers/db.helper";
+import EmailSender from "../helpers/email.helper";
 
 const router = express.Router();
 const model = new Model();
@@ -128,6 +129,43 @@ router.post('/seed-affiliate', async (_req: Request, res: Response) => {
     });
   } catch (error: any) {
     res.status(500).json({ status: 500, message: error.message });
+  }
+});
+
+// Temporary test route for SMTP2GO (protected by secret)
+router.get('/send-test-email', async (req: Request, res: Response) => {
+  const { to, secret } = req.query;
+
+  const expectedSecret = process.env.EMAIL_TEST_SECRET;
+
+  if (!expectedSecret || secret !== expectedSecret) {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+
+  if (!to || typeof to !== 'string') {
+    return res.status(400).json({ error: 'Missing "to" query parameter' });
+  }
+
+  try {
+    const emailSender = new EmailSender();
+
+    const success = await emailSender.sendMail(
+      to,
+      'SMTP2GO Test from Render',
+      'SMTP2GO Integration Test',
+      `This is a test email sent from the deployed app on Render using SMTP2GO.<br><br>
+       Timestamp: ${new Date().toISOString()}<br>
+       Recipient: ${to}`
+    );
+
+    if (success) {
+      res.json({ success: true, message: `Test email sent to ${to}` });
+    } else {
+      res.status(500).json({ success: false, message: 'Failed to send email' });
+    }
+  } catch (error: any) {
+    console.error('Test email error:', error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 

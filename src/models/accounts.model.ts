@@ -206,16 +206,16 @@ class Accounts extends Model {
       followersCount = await new FacebookAPI().getFollowers(socialUsername)
     }
     console.log("followersCount", followersCount);
-    const sites = await this.selectDataQuery(`sm_site_users`, `site_id='${site_id}' and user_id='${userId}'`);
-    if (sites.length > 0) {
-      if (followersCount && followersCount > 0) {
-        const info = { followers: followersCount, last_synced_at: new Date() }
-        await this.updateData(`sm_site_users`, `site_id='${site_id}' and user_id='${userId}'`, info);
-      }
-    } else {
-      const siteInfo = { site_id, user_id: userId, is_verified: 'yes', followers: followersCount, username: socialUsername, link: "", last_synced_at: new Date() }
-      await this.insertData(`sm_site_users`, siteInfo);
-    }
+     const sites = await this.selectDataQuery(`sm_site_users`, `site_id='${site_id}' and user_id='${userId}'`);
+     if (sites.length > 0) {
+       if (followersCount !== null && followersCount !== undefined) {
+         const info = { followers: followersCount, last_synced_at: new Date() }
+         await this.updateData(`sm_site_users`, `site_id='${site_id}' and user_id='${userId}'`, info);
+       }
+     } else {
+       const siteInfo = { site_id, user_id: userId, is_verified: 'yes', followers: followersCount, username: socialUsername, link: "", last_synced_at: new Date() }
+       await this.insertData(`sm_site_users`, siteInfo);
+     }
     return followersCount;
   }
 
@@ -296,12 +296,12 @@ class Accounts extends Model {
 
       followersCount = await this.updateFollowersCount(socialUsername, site_id, userId, followersCount || 0);
       const sites = await this.selectDataQuery(`sm_site_users`, `site_id='${site_id}' and user_id='${userId}'`);
-      if (sites.length > 0) {
-        if (followersCount && followersCount > 0) {
-          const info = { followers: followersCount, last_synced_at: new Date() }
-          await this.updateData(`sm_site_users`, `site_id='${site_id}' and user_id='${userId}'`, info);
-        }
-      } else {
+       if (sites.length > 0) {
+         if (followersCount !== null && followersCount !== undefined) {
+           const info = { followers: followersCount, last_synced_at: new Date() }
+           await this.updateData(`sm_site_users`, `site_id='${site_id}' and user_id='${userId}'`, info);
+         }
+       } else {
         const siteInfo = { site_id, user_id: userId, is_verified: 'yes', followers: followersCount, username: socialUsername, link: "", last_synced_at: new Date() }
         await this.insertData(`sm_site_users`, siteInfo);
       }
@@ -1736,11 +1736,11 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
          followersCount = await new FacebookAPI().getFollowers(username);
        }
 
-       console.log("resyncFollowers", site_id, username, followersCount);
-       if (followersCount != null && followersCount > 0) {
-         const newUser = { followers: followersCount, last_synced_at: new Date() };
-         await this.updateData("sm_site_users", `site_id='${site_id}' AND user_id='${userId}'`, newUser);
-       }
+        console.log("resyncFollowers", site_id, username, followersCount);
+        if (followersCount !== null && followersCount !== undefined) {
+          const newUser = { followers: followersCount, last_synced_at: new Date() };
+          await this.updateData("sm_site_users", `site_id='${site_id}' AND user_id='${userId}'`, newUser);
+        }
      }
      return this.makeResponse(200, "Followers re-synced successfully");
    }

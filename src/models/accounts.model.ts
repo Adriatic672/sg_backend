@@ -1863,18 +1863,17 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
      if (userInfo.length == 0) {
        return this.makeResponse(400, "User not found");
      }
-
-     this.updateData("users", `user_id='${userId}'`, { status: 'pendingDelete' });
-
-     // Create maker-checker request instead of direct deletion
+     
      try {
+       await this.updateData("users", `user_id='${userId}'`, { status: 'pendingDelete' });
+
        const deleteRequest = {
          influencer_id: userId,
          userId,
          reason,
          status: 'pending',
          created_on: new Date()
-       }
+       };
        await this.insertData("delete_requests", deleteRequest);
        
        const requestData = {
@@ -1886,24 +1885,16 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
          timestamp: new Date().toISOString()
        };
 
+       const makerCheckerResult = await makerCheckerHelper.createRequest(
+         'DELETE', 'users', userId, userId, requestData, 1, reason
+       );
 
-      const makerCheckerResult = await makerCheckerHelper.createRequest(
-        'DELETE',
-        'users',
-        userId,
-        userId,
-        requestData,
-        1,
-        reason
-      );
-
-
-      return this.makeResponse(200, "Account deletion request submitted successfully", makerCheckerResult);
-    } catch (error: any) {
-      logger.error("Error in requestAccountDeletion:", error);
-      return this.makeResponse(200, "request sent");
-    }
-  }
+       return this.makeResponse(200, "Account deletion request submitted successfully", makerCheckerResult);
+     } catch (error: any) {
+       logger.error("Error in requestAccountDeletion:", error);
+       return this.makeResponse(500, "Failed to submit deletion request", { error: error.message });
+     }
+   }
   /**
    * Get all delete requests in the last 30 days.
    */

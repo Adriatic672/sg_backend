@@ -7,21 +7,25 @@ import { response } from "express";
 export default class Notifications extends Model {
 
   async getUnreadNotifications(userId: any) {
-    const notifications: any = await this.selectDataQuery(`notifications`, `user_id='${userId}' AND status='unread'`, 15, `created_at DESC`)
-    
-    // Parse 'message' as JSON if it's a stringified object
-    const processed = (notifications || []).map((notif: any) => {
-      if (notif.message && typeof notif.message === 'string' && (notif.message.trim().startsWith('{') || notif.message.trim().startsWith('['))) {
-        try {
-          notif.message = JSON.parse(notif.message);
-        } catch (e) {
-          // Not valid JSON, keep as original string
+    try {
+      const notifications: any = await this.selectDataQuery(`notifications`, `user_id='${userId}' AND status='unread'`, 15, `created_at DESC`)
+      
+      const processed = (notifications || []).map((notif: any) => {
+        if (notif.message && typeof notif.message === 'string' && (notif.message.trim().startsWith('{') || notif.message.trim().startsWith('['))) {
+          try {
+            notif.message = JSON.parse(notif.message);
+          } catch (e) {}
         }
-      }
-      return notif;
-    });
+        return notif;
+      });
 
-    return this.makeResponse(200, "Unread notifications retrieved successfully", processed);
+      return this.makeResponse(200, "Unread notifications retrieved successfully", {
+        notifications: processed,
+        pagination: { total: processed.length, limit: 15, offset: 0, hasMore: false }
+      });
+    } catch (error: any) {
+      return this.makeResponse(500, "Error fetching unread notifications", { notifications: [] });
+    }
   }
   async markAsRead(userId: any, notificationIds: any[]) {
     const response = await this.updateData('notifications', `id IN (${notificationIds.join(',')})`, { status: 'read' });
@@ -32,21 +36,25 @@ export default class Notifications extends Model {
   }
 
   async getNotifications(userId: string) {
-    const notifications: any = await this.selectDataQuery(`notifications`, `user_id='${userId}'`, 15, `created_at DESC`)
-    
-    // Parse 'message' if it's a stringified JSON object
-    const processed = (notifications || []).map((notif: any) => {
-      if (notif.message && typeof notif.message === 'string' && (notif.message.trim().startsWith('{') || notif.message.trim().startsWith('['))) {
-        try {
-          notif.message = JSON.parse(notif.message);
-        } catch (e) {
-          // Keep as string if not valid JSON
+    try {
+      const notifications: any = await this.selectDataQuery(`notifications`, `user_id='${userId}'`, 15, `created_at DESC`)
+      
+      const processed = (notifications || []).map((notif: any) => {
+        if (notif.message && typeof notif.message === 'string' && (notif.message.trim().startsWith('{') || notif.message.trim().startsWith('['))) {
+          try {
+            notif.message = JSON.parse(notif.message);
+          } catch (e) {}
         }
-      }
-      return notif;
-    });
+        return notif;
+      });
 
-    return this.makeResponse(200, "Notifications retrieved successfully", processed);
+      return this.makeResponse(200, "Notifications retrieved successfully", {
+        notifications: processed,
+        pagination: { total: processed.length, limit: 15, offset: 0, hasMore: false }
+      });
+    } catch (error: any) {
+      return this.makeResponse(500, "Error fetching notifications", { notifications: [] });
+    }
   }
   async AIMessage() {
     const chat = new DailyMessageGenerator()

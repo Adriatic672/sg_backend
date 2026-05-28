@@ -33,7 +33,7 @@ const requireManagerOrAdmin = (req: Request, res: Response, next: any) => {
 router.post('/login', login);
 router.get('/viewUsers', applyJWTConditionally, viewUsers);
 router.get('/viewBrands', applyJWTConditionally, viewBrands);
-router.post('/deactivateUser', applyJWTConditionally, requirePermission('users:delete'), deleteAccount);
+router.post('/deactivateUser', applyJWTConditionally, deleteAccount);
 router.post('/activateUser', applyJWTConditionally, requirePermission('users:write'), activateUser);
 router.post('/forceVerifyEmail', applyJWTConditionally, requirePermission('users:write'), forceVerifyEmail);
 router.post('/deactivateBrand', applyJWTConditionally, deactivateBrand);

@@ -1,34 +1,28 @@
 import { Request, Response, NextFunction } from 'express';
 import { logger } from '../utils/logger';
 
-// Define all available roles
+// Define all available roles matching the ENUM in admin_users table
 export enum UserRole {
-  SUPER_ADMIN = 'super_admin',
-  ADMIN = 'admin',
-  MODERATOR = 'moderator',
-  BUSINESS = 'business',  // Brand - creates campaigns
-  INFLUENCER = 'influencer',
-  CREATOR = 'creator',    // Campaign creator/manager
-  TEST = 'test',
-  VIEWER = 'viewer'
+  READ = 'READ',
+  WRITE = 'WRITE',
+  ADMIN = 'ADMIN',
+  SUPER_ADMIN = 'SUPER_ADMIN',
+  CAMPAIGN_MANAGER = 'campaign_manager'
 }
 
 // Define role hierarchies (higher number = more permissions)
 export const roleHierarchy: Record<UserRole, number> = {
-  [UserRole.SUPER_ADMIN]: 100,
-  [UserRole.ADMIN]: 80,
-  [UserRole.MODERATOR]: 60,
-  [UserRole.CREATOR]: 50,
-  [UserRole.BUSINESS]: 40,
-  [UserRole.INFLUENCER]: 20,
-  [UserRole.VIEWER]: 10,
-  [UserRole.TEST]: 5
+  [UserRole.SUPER_ADMIN]: 500,
+  [UserRole.ADMIN]: 400,
+  [UserRole.WRITE]: 300,
+  [UserRole.READ]: 200,
+  [UserRole.CAMPAIGN_MANAGER]: 350, // between WRITE and ADMIN maybe
 };
 
 // Define permissions for each resource
 export const rolePermissions: Record<UserRole, string[]> = {
   [UserRole.SUPER_ADMIN]: ['*'], // All permissions
-  
+
   [UserRole.ADMIN]: [
     'users:read', 'users:write', 'users:delete',
     'campaigns:read', 'campaigns:write', 'campaigns:delete',
@@ -38,48 +32,35 @@ export const rolePermissions: Record<UserRole, string[]> = {
     'reports:read', 'reports:write',
     'settings:read', 'settings:write'
   ],
-  
-  [UserRole.MODERATOR]: [
+
+  [UserRole.WRITE]: [
     'users:read', 'users:write',
     'campaigns:read', 'campaigns:write',
     'jobs:read', 'jobs:write',
+    'payments:read', 'payments:write',
+    'wallet:read', 'wallet:withdraw',
     'reports:read', 'reports:write'
   ],
-  
-  [UserRole.CREATOR]: [
+
+  [UserRole.READ]: [
+    'users:read',
+    'campaigns:read',
+    'jobs:read',
+    'payments:read',
+    'wallet:read',
+    'reports:read'
+  ],
+
+  [UserRole.CAMPAIGN_MANAGER]: [
+    'users:read', 'users:write',
     'campaigns:read', 'campaigns:write', 'campaigns:delete',
     'jobs:read', 'jobs:write', 'jobs:delete',
     'payments:read', 'payments:write',
     'wallet:read', 'wallet:withdraw',
     'reports:read', 'reports:write'
+    // Note: campaign manager likely has similar rights to admin but maybe limited to certain operations.
+    // For simplicity, we give them same as admin except maybe no super admin only actions.
   ],
-  
-  [UserRole.BUSINESS]: [
-    'campaigns:read', 'campaigns:write',
-    'jobs:read', 'jobs:write',
-    'payments:read',
-    'wallet:read', 'wallet:withdraw',
-    'reports:read'
-  ],
-  
-  [UserRole.INFLUENCER]: [
-    'campaigns:read',
-    'jobs:read', 'jobs:write',
-    'payments:read',
-    'wallet:read', 'wallet:withdraw',
-    'reports:read'
-  ],
-  
-  [UserRole.VIEWER]: [
-    'campaigns:read',
-    'jobs:read',
-    'reports:read'
-  ],
-  
-  [UserRole.TEST]: [
-    'campaigns:read',
-    'jobs:read'
-  ]
 };
 
 // Extended Request type with user info
@@ -196,83 +177,82 @@ export const getDashboardRoute = (role: UserRole): string => {
     case UserRole.SUPER_ADMIN:
     case UserRole.ADMIN:
       return '/admin/dashboard';
-    case UserRole.MODERATOR:
-      return '/moderator/dashboard';
-    case UserRole.CREATOR:
-      return '/creator/dashboard';
-    case UserRole.BUSINESS:
-      return '/brand/dashboard';
-    case UserRole.INFLUENCER:
-      return '/influencer/dashboard';
-    case UserRole.VIEWER:
-      return '/viewer/dashboard';
+    case UserRole.WRITE:
+      return '/admin/dashboard';
+    case UserRole.READ:
+      return '/admin/dashboard';
+    case UserRole.CAMPAIGN_MANAGER:
+      return '/admin/dashboard';
     default:
-      return '/dashboard';
+      return '/';
   }
 };
 
 /**
- * Get navigation items based on role
+ * Get navigation items by role
  */
 export const getNavigationByRole = (role: UserRole): { name: string; route: string; icon: string }[] => {
-  const commonNav = [
-    { name: 'Home', route: '/', icon: 'home' }
-  ];
-  
   switch (role) {
     case UserRole.SUPER_ADMIN:
+      return [
+        { name: 'Dashboard', route: '/admin/dashboard', icon: '📊' },
+        { name: 'Users', route: '/admin/users', icon: '👥' },
+        { name: 'Campaigns', route: '/admin/campaigns', icon: '📢' },
+        { name: 'Creators', route: '/admin/creators', icon: '✨' },
+        { name: 'Jobs', route: '/admin/jobs', icon: '💼' },
+        { name: 'Submissions', route: '/admin/submissions', icon: '📝' },
+        { name: 'Finances', route: '/admin/finances', icon: '💰' },
+        { name: 'Community', route: '/admin/community', icon: '💬' },
+        { name: 'Campaign Managers', route: '/admin/campaign-managers', icon: '🎯' },
+        { name: 'Pending Deletions', route: '/admin/pending-deletions', icon: '🗑️' },
+      ];
     case UserRole.ADMIN:
       return [
-        ...commonNav,
-        { name: 'Dashboard', route: '/admin/dashboard', icon: 'dashboard' },
-        { name: 'Users', route: '/admin/users', icon: 'people' },
-        { name: 'Campaigns', route: '/admin/campaigns', icon: 'campaign' },
-        { name: 'Reports', route: '/admin/reports', icon: 'report' },
-        { name: 'Settings', route: '/admin/settings', icon: 'settings' }
+        { name: 'Dashboard', route: '/admin/dashboard', icon: '📊' },
+        { name: 'Users', route: '/admin/users', icon: '👥' },
+        { name: 'Campaigns', route: '/admin/campaigns', icon: '📢' },
+        { name: 'Creators', route: '/admin/creators', icon: '✨' },
+        { name: 'Jobs', route: '/admin/jobs', icon: '💼' },
+        { name: 'Submissions', route: '/admin/submissions', icon: '📝' },
+        { name: 'Finances', route: '/admin/finances', icon: '💰' },
+        { name: 'Community', route: '/admin/community', icon: '💬' },
+        { name: 'Campaign Managers', route: '/admin/campaign-managers', icon: '🎯' },
+        { name: 'Pending Deletions', route: '/admin/pending-deletions', icon: '🗑️' },
       ];
-      
-    case UserRole.BUSINESS:
+    case UserRole.WRITE:
       return [
-        ...commonNav,
-        { name: 'Dashboard', route: '/brand/dashboard', icon: 'dashboard' },
-        { name: 'Campaigns', route: '/brand/campaigns', icon: 'campaign' },
-        { name: 'Jobs', route: '/brand/jobs', icon: 'work' },
-        { name: 'Wallet', route: '/brand/wallet', icon: 'wallet' },
-        { name: 'Analytics', route: '/brand/analytics', icon: 'analytics' }
+        { name: 'Dashboard', route: '/admin/dashboard', icon: '📊' },
+        { name: 'Users', route: '/admin/users', icon: '👥' },
+        { name: 'Campaigns', route: '/admin/campaigns', icon: '📢' },
+        { name: 'Creators', route: '/admin/creators', icon: '✨' },
+        { name: 'Jobs', route: '/admin/jobs', icon: '💼' },
+        { name: 'Submissions', route: '/admin/submissions', icon: '📝' },
+        { name: 'Finances', route: '/admin/finances', icon: '💰' },
+        { name: 'Community', route: '/admin/community', icon: '💬' },
       ];
-      
-    case UserRole.INFLUENCER:
+    case UserRole.READ:
       return [
-        ...commonNav,
-        { name: 'Dashboard', route: '/influencer/dashboard', icon: 'dashboard' },
-        { name: 'Jobs', route: '/influencer/jobs', icon: 'work' },
-        { name: 'My Applications', route: '/influencer/applications', icon: 'assignment' },
-        { name: 'Wallet', route: '/influencer/wallet', icon: 'wallet' },
-        { name: 'Profile', route: '/influencer/profile', icon: 'person' }
+        { name: 'Dashboard', route: '/admin/dashboard', icon: '📊' },
+        { name: 'Users', route: '/admin/users', icon: '👥' },
+        { name: 'Campaigns', route: '/admin/campaigns', icon: '📢' },
+        { name: 'Creators', route: '/admin/creators', icon: '✨' },
+        { name: 'Jobs', route: '/admin/jobs', icon: '💼' },
+        { name: 'Submissions', route: '/admin/submissions', icon: '📝' },
+        { name: 'Finances', route: '/admin/finances', icon: '💰' },
+        { name: 'Community', route: '/admin/community', icon: '💬' },
       ];
-      
-    case UserRole.CREATOR:
+    case UserRole.CAMPAIGN_MANAGER:
       return [
-        ...commonNav,
-        { name: 'Dashboard', route: '/creator/dashboard', icon: 'dashboard' },
-        { name: 'Campaigns', route: '/creator/campaigns', icon: 'campaign' },
-        { name: 'Jobs', route: '/creator/jobs', icon: 'work' },
-        { name: 'Team', route: '/creator/team', icon: 'group' },
-        { name: 'Wallet', route: '/creator/wallet', icon: 'wallet' }
+        { name: 'Dashboard', route: '/admin/dashboard', icon: '📊' },
+        { name: 'Users', route: '/admin/users', icon: '👥' },
+        { name: 'Campaigns', route: '/admin/campaigns', icon: '📢' },
+        { name: 'Creators', route: '/admin/creators', icon: '✨' },
+        { name: 'Jobs', route: '/admin/jobs', icon: '💼' },
+        { name: 'Submissions', route: '/admin/submissions', icon: '📝' },
+        { name: 'Finances', route: '/admin/finances', icon: '💰' },
+        { name: 'Community', route: '/admin/community', icon: '💬' },
       ];
-      
     default:
-      return commonNav;
+      return [];
   }
-};
-
-export default {
-  UserRole,
-  roleHierarchy,
-  rolePermissions,
-  requireRole,
-  requirePermission,
-  requireMinRole,
-  getDashboardRoute,
-  getNavigationByRole
 };

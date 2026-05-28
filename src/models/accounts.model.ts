@@ -1148,14 +1148,16 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
 
 
 
-  async checkIfReceibedBonus() {
-    const users: any = await this.callQuerySafe(`SELECT * FROM users`);
-    for (let i = 0; i < users.length; i++) {
-      const userId = users[i].user_id
-      const transactions: any = await this.callQuerySafe(`SELECT * FROM gm_transactions where user_id='${userId}' and narration='SIGN_UP_POINTS' and status='success'`);
-      if (transactions.length == 0) {
-        await this.rewardGems(userId, 30, "SIGN_UP_POINTS")
-      }
+   async checkIfReceibedBonus() {
+     const users: any = await this.callQuerySafe(`SELECT * FROM users u LEFT JOIN deleted_users d ON u.user_id = d.user_id WHERE d.user_id IS NULL`);
+     for (let i = 0; i < users.length; i++) {
+       const userId = users[i].user_id
+       const transactions: any = await this.callQuerySafe(`SELECT * FROM gm_transactions where user_id='${userId}' and narration='SIGN_UP_POINTS' and status='success'`);
+       if (transactions.length == 0) {
+         await this.rewardGems(userId, 30, "SIGN_UP_POINTS")
+       }
+     }
+   }
     }
     return this.makeResponse(200, "done");
 

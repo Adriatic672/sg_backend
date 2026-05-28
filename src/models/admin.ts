@@ -667,10 +667,11 @@ class Admin extends Model {
 
 
   async getusers() {
-    return await this.callQuerySafe(`SELECT DATE_FORMAT(created_at, '%Y-%m-%d') AS date, COUNT(*) AS users
-FROM users
+     return await this.callQuerySafe(`SELECT DATE_FORMAT(created_at, '%Y-%m-%d') AS date, COUNT(*) AS users
+FROM users u LEFT JOIN deleted_users d ON u.user_id = d.user_id
+WHERE d.user_id IS NULL
 GROUP BY DATE(created_at)
- `);
+`);
   }
 
 
@@ -776,9 +777,9 @@ INNER JOIN users_profile p ON u.user_id = p.user_id`);
 
 
 
-  async getUsersByRegion() {
-    return await this.callQuerySafe(`SELECT count(*), iso_code,first_name FROM users_profile  group by iso_code`);
-  }
+   async getUsersByRegion() {
+     return await this.callQuerySafe(`SELECT count(*), u.iso_code, p.first_name FROM users u INNER JOIN users_profile p ON u.user_id = p.user_id LEFT JOIN deleted_users d ON u.user_id = d.user_id WHERE d.user_id IS NULL GROUP BY u.iso_code`);
+   }
 
    async deleteAccount(data: any) {
      console.log("deleteAccount", data)
@@ -828,7 +829,7 @@ INNER JOIN users_profile p ON u.user_id = p.user_id`);
    * Execute approved delete account request
    * This function is called when a maker-checker request is approved
    */
-   async executeDeleteAccount(requestData: any) {
+async executeDeleteAccount(requestData: any) {
 
      console.log("executeDeleteAccount", requestData)
      const { influencer_id, userId, reason, userInfo } = requestData;
@@ -845,26 +846,25 @@ INNER JOIN users_profile p ON u.user_id = p.user_id`);
        // Log the operation
        this.logOperation("deleteAccount", userId, influencer_id, userInfo);
 
-       // Begin transaction
-       this.beginTransaction();
-
-       // Save deletion record (for JWT blocking and tombstone)
-       const saveDeleteUserRecord = {
+       this.beginTransaction()
+       
+       // Save deletion record (for JWT blocking)
+       const saveDeleteUser = {
          user_id: influencer_id,
          deleted_by: userId,
          reason: reason,
          status: 'deleted'
        };
-       await this.insertData("deleted_users", saveDeleteUserRecord);
+       await this.insertData("deleted_users", saveDeleteUser);
 
-       // Execute the actual deletion from tables
+       // Execute the actual deletion from tables (same order as deactivateBrand)
        await this.callQuerySafe(`DELETE FROM users WHERE user_id = '${influencer_id}'`);
        await this.callQuerySafe(`DELETE FROM sm_site_users WHERE user_id = '${influencer_id}'`);
        await this.callQuerySafe(`DELETE FROM users_profile WHERE user_id = '${influencer_id}'`);
        await this.callQuerySafe(`DELETE FROM business_profile WHERE business_id = '${influencer_id}'`);
 
+       await this.commitTransaction()
        this.logOperation("deleteAccount", userId, influencer_id, requestData);
-       await this.commitTransaction();
 
        // Send notification email
        const email = userInfo.email || userProfile.email;
@@ -872,10 +872,10 @@ INNER JOIN users_profile p ON u.user_id = p.user_id`);
 
        return this.makeResponse(200, "Account deleted successfully");
      } catch (error) {
-       console.log("Error in executeDeleteAccount:", error)
        this.logOperation("deleteAccount", userId, influencer_id, requestData);
+       
        logger.error("Error in executeDeleteAccount:", error);
-       await this.rollbackTransaction();
+       await this.rollbackTransaction()
        return this.makeResponse(500, "Error deleting account", error);
      }
    }
@@ -1677,30 +1677,34 @@ COALESCE(p.username, 'admin') AS username,
       where += ` AND (p.first_name LIKE '%${safe}%' OR p.last_name LIKE '%${safe}%' OR p.username LIKE '%${safe}%')`;
     }
 
-    const countResult: any = await this.callQuerySafe(`
-      SELECT COUNT(*) AS total
-      FROM users u
-      INNER JOIN users_profile p ON u.user_id = p.user_id
-      ${where}
-    `);
+     const countResult: any = await this.callQuerySafe(`
+       SELECT COUNT(*) AS total
+       FROM users u
+       INNER JOIN users_profile p ON u.user_id = p.user_id
+       LEFT JOIN deleted_users d ON u.user_id = d.user_id
+       WHERE d.user_id IS NULL
+       ${where}
+     `);
     const total = countResult[0]?.total ?? 0;
 
-    const rows: any = await this.callQuerySafe(`
-      SELECT
-        p.user_id, p.username, p.first_name, p.last_name, p.profile_pic,
-        p.iso_code, p.influencer_rating,
-        p.reliability_score, p.reliability_score_updated_at,
-        p.content_best_at, p.industry_ids,
-        p.gender, p.created_on,
-        u.email, u.level_id, u.is_social_verified,
-        l.level_name
-      FROM users u
-      INNER JOIN users_profile p ON u.user_id = p.user_id
-      LEFT JOIN levels l ON u.level_id = l.id
-      ${where}
-      ORDER BY p.reliability_score DESC, p.influencer_rating DESC, p.created_on DESC
-      LIMIT ${limitNum} OFFSET ${offset}
-    `);
+     const rows: any = await this.callQuerySafe(`
+       SELECT
+         p.user_id, p.username, p.first_name, p.last_name, p.profile_pic,
+         p.iso_code, p.influencer_rating,
+         p.reliability_score, p.reliability_score_updated_at,
+         p.content_best_at, p.industry_ids,
+         p.gender, p.created_on,
+         u.email, u.level_id, u.is_social_verified,
+         l.level_name
+       FROM users u
+       INNER JOIN users_profile p ON u.user_id = p.user_id
+       LEFT JOIN levels l ON u.level_id = l.id
+       LEFT JOIN deleted_users d ON u.user_id = d.user_id
+       WHERE d.user_id IS NULL
+       ${where}
+       ORDER BY p.reliability_score DESC, p.influencer_rating DESC, p.created_on DESC
+       LIMIT ${limitNum} OFFSET ${offset}
+     `);
 
     return this.makeResponse(200, 'success', {
       creators: rows,

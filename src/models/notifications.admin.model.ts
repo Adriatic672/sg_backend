@@ -19,12 +19,9 @@ export default class Notifications extends Model {
         return notif;
       });
 
-      return this.makeResponse(200, "Unread notifications retrieved successfully", {
-        notifications: processed,
-        pagination: { total: processed.length, limit: 15, offset: 0, hasMore: false }
-      });
+      return this.makeResponse(200, "Unread notifications retrieved successfully", processed);
     } catch (error: any) {
-      return this.makeResponse(500, "Error fetching unread notifications", { notifications: [] });
+      return this.makeResponse(500, "Error fetching unread notifications", []);
     }
   }
   async markAsRead(userId: any, notificationIds: any[]) {
@@ -48,12 +45,9 @@ export default class Notifications extends Model {
         return notif;
       });
 
-      return this.makeResponse(200, "Notifications retrieved successfully", {
-        notifications: processed,
-        pagination: { total: processed.length, limit: 15, offset: 0, hasMore: false }
-      });
+      return this.makeResponse(200, "Notifications retrieved successfully", processed);
     } catch (error: any) {
-      return this.makeResponse(500, "Error fetching notifications", { notifications: [] });
+      return this.makeResponse(500, "Error fetching notifications", []);
     }
   }
   async AIMessage() {

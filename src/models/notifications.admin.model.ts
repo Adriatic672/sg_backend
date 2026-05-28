@@ -1,13 +1,27 @@
 import Model from "../helpers/model";
 import { sendNotification } from '../helpers/FCM'
 import DailyMessageGenerator from '../thirdparty/ChatGptAPI'
+import { json } from "express";
 import { response } from "express";
 
 export default class Notifications extends Model {
 
   async getUnreadNotifications(userId: any) {
-    const notifications = await this.selectDataQuery(`notifications`, `user_id='${userId}' AND status='unread'`, 15, `created_at DESC`)
-    return this.makeResponse(200, "Unread notifications retrieved successfully", notifications);
+    const notifications: any = await this.selectDataQuery(`notifications`, `user_id='${userId}' AND status='unread'`, 15, `created_at DESC`)
+    
+    // Parse 'message' as JSON if it's a stringified object
+    const processed = (notifications || []).map((notif: any) => {
+      if (notif.message && typeof notif.message === 'string' && (notif.message.trim().startsWith('{') || notif.message.trim().startsWith('['))) {
+        try {
+          notif.message = JSON.parse(notif.message);
+        } catch (e) {
+          // Not valid JSON, keep as original string
+        }
+      }
+      return notif;
+    });
+
+    return this.makeResponse(200, "Unread notifications retrieved successfully", processed);
   }
   async markAsRead(userId: any, notificationIds: any[]) {
     const response = await this.updateData('notifications', `id IN (${notificationIds.join(',')})`, { status: 'read' });
@@ -18,8 +32,21 @@ export default class Notifications extends Model {
   }
 
   async getNotifications(userId: string) {
-    const notifications = await this.selectDataQuery(`notifications`, `user_id='${userId}'`, 15, `created_at DESC`)
-    return this.makeResponse(200, "Notifications retrieved successfully", notifications);
+    const notifications: any = await this.selectDataQuery(`notifications`, `user_id='${userId}'`, 15, `created_at DESC`)
+    
+    // Parse 'message' if it's a stringified JSON object
+    const processed = (notifications || []).map((notif: any) => {
+      if (notif.message && typeof notif.message === 'string' && (notif.message.trim().startsWith('{') || notif.message.trim().startsWith('['))) {
+        try {
+          notif.message = JSON.parse(notif.message);
+        } catch (e) {
+          // Keep as string if not valid JSON
+        }
+      }
+      return notif;
+    });
+
+    return this.makeResponse(200, "Notifications retrieved successfully", processed);
   }
   async AIMessage() {
     const chat = new DailyMessageGenerator()
@@ -62,4 +89,3 @@ export default class Notifications extends Model {
 
 
 }
-

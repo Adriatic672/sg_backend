@@ -23,6 +23,57 @@ export default class InstagramAPI {
     return this.axiosInstance.post(url, data, config);
   }
 
+  private followerCountFromPayload(data: any): number {
+    const candidates = [
+      data?.followers,
+      data?.follower_count,
+      data?.followers_count,
+      data?.user?.followers,
+      data?.user?.follower_count,
+      data?.user?.followers_count,
+      data?.data?.followers,
+      data?.data?.follower_count,
+      data?.data?.followers_count,
+      data?.data?.user?.followers,
+      data?.data?.user?.follower_count,
+      data?.data?.user?.followers_count,
+      data?.edge_followed_by?.count,
+      data?.user?.edge_followed_by?.count,
+      data?.data?.edge_followed_by?.count,
+      data?.data?.user?.edge_followed_by?.count,
+    ];
+
+    for (const value of candidates) {
+      const count = this.parseFollowerCount(value);
+      if (count !== null) return count;
+    }
+
+    return 0;
+  }
+
+  private parseFollowerCount(value: any): number | null {
+    if (typeof value === 'number' && Number.isFinite(value)) return Math.floor(value);
+    if (typeof value !== 'string') return null;
+
+    const normalized = value.trim().toLowerCase().replace(/,/g, '');
+    if (!normalized) return null;
+
+    const match = normalized.match(/^(\d+(?:\.\d+)?)([kmb])?$/);
+    if (!match) {
+      const parsed = Number(normalized);
+      return Number.isFinite(parsed) ? Math.floor(parsed) : null;
+    }
+
+    const amount = Number(match[1]);
+    const suffix = match[2];
+    const multiplier = suffix === 'k' ? 1_000 : suffix === 'm' ? 1_000_000 : suffix === 'b' ? 1_000_000_000 : 1;
+    return Math.floor(amount * multiplier);
+  }
+
+  private instagramUserFromPayload(data: any, fallbackUsername: string): any {
+    return data?.user || data?.data?.user || data?.data || data || {};
+  }
+
   /**
    * Fetch number of viewers or interactions on a post (used similarly to followers).
    * @param postCode Instagram post shortcode or ID (e.g., CxYQJO8xuC6)
@@ -30,7 +81,7 @@ export default class InstagramAPI {
   public async getFollowers(username: string): Promise<number> {
     try {
       const response = await this.get('/account-info', { username });
-      const count = response.data?.followers || response.data?.follower_count || 0;
+      const count = this.followerCountFromPayload(response.data);
       console.log('getFollowers-x (Instagram)', count);
       return count;
     } catch (error) {
@@ -42,12 +93,13 @@ export default class InstagramAPI {
   async getUserInfo(username: string): Promise<UserInfo> {
     try {
       const response = await this.get('/account-info', { username });
-      const d = response.data;
+      const d = this.instagramUserFromPayload(response.data, username);
+      const followersCount = this.followerCountFromPayload(response.data);
       console.log('Instagram getUserInfo response:', d);
       return {
         user: {
           id: d.id || d.pk || '',
-          followers_count: d.followers || d.follower_count || 0,
+          followers_count: followersCount,
           verified: d.is_verified || d.verified || false,
           location: d.city_name || d.location || '',
           created_at: d.created_at || '',

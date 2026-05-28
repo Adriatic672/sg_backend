@@ -341,6 +341,7 @@ export default class SocialModel extends Model {
         try {
             const RapidInstagram = require('../thirdparty/Rapid.Instagram').default;
             const instagramAPI = new RapidInstagram();
+            username = String(username || '').trim().replace(/^@+/, '');
             
             console.log('Connecting Instagram with username:', username);
             
@@ -351,13 +352,15 @@ export default class SocialModel extends Model {
             if (!userInfo || !userInfo.user) {
                 return this.makeResponse(400, "Failed to find Instagram user");
             }
+
+            const followersCount = Number(userInfo.user.followers_count || 0);
             
             // Store the Instagram connection
             const tokenData = {
                 access_token: username, // Use username as token for RapidAPI
                 username: username,
                 user_id: userInfo.user.id,
-                followers_count: userInfo.user.followers_count,
+                followers_count: followersCount,
                 verified: userInfo.user.verified,
                 platform: 'instagram',
                 connected_at: new Date().toISOString()
@@ -373,10 +376,13 @@ export default class SocialModel extends Model {
                     user_id: userId,
                     site_id: siteId,
                     username: username,
-                    followers: userInfo.user.followers_count,
-                    is_verified: userInfo.user.verified ? 'yes' : 'no',
-                    created_on: new Date()
+                    followers: followersCount,
+                    is_verified: 'yes',
+                    link: `https://www.instagram.com/${username}`,
+                    created_on: new Date(),
+                    last_synced_at: new Date()
                 });
+                await this.updateData("users", `user_id='${userId}'`, { is_social_verified: 'yes' });
             }
 
             await this.storeSocialTokens('instagram', userId, tokenData as any);
@@ -385,7 +391,7 @@ export default class SocialModel extends Model {
                 message: 'Instagram connected successfully',
                 username: username,
                 userId: userInfo.user.id,
-                followers: userInfo.user.followers_count
+                followers: followersCount
             });
         } catch (error) {
             console.error('Instagram username connection error:', error);

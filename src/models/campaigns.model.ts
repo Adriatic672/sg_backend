@@ -1572,6 +1572,7 @@ WHERE campaign_id = '${campaign_id}'`);
         response: JSON.stringify(data),
         eligible_users: JSON.stringify(data.eligibleInfluencers),
         search_hash: searchHash,
+        campaign_id: request.campaign_id,
         created_at: new Date().toISOString().slice(0, 19).replace('T', ' ')
       };
       const insertedSearchId = await this.insertData("elig_searches", newSearch);

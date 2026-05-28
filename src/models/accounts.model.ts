@@ -1148,22 +1148,18 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
 
 
 
-   async checkIfReceibedBonus() {
-     const users: any = await this.callQuerySafe(`SELECT * FROM users u LEFT JOIN deleted_users d ON u.user_id = d.user_id WHERE d.user_id IS NULL`);
-     for (let i = 0; i < users.length; i++) {
-       const userId = users[i].user_id
-       const transactions: any = await this.callQuerySafe(`SELECT * FROM gm_transactions where user_id='${userId}' and narration='SIGN_UP_POINTS' and status='success'`);
-       if (transactions.length == 0) {
-         await this.rewardGems(userId, 30, "SIGN_UP_POINTS")
+    async checkIfReceibedBonus() {
+       const users: any = await this.callQuerySafe(`SELECT * FROM users u LEFT JOIN deleted_users d ON u.user_id = d.user_id WHERE d.user_id IS NULL`);
+       for (let i = 0; i < users.length; i++) {
+         const userId = users[i].user_id
+         const transactions: any = await this.callQuerySafe(`SELECT * FROM gm_transactions where user_id='${userId}' and narration='SIGN_UP_POINTS' and status='success'`);
+         if (transactions.length == 0) {
+           await this.rewardGems(userId, 30, "SIGN_UP_POINTS")
+         }
        }
-     }
-   }
     }
-    return this.makeResponse(200, "done");
 
-  }
-
-  async verifyBusiness(data: any) {
+    async verifyBusiness(data: any) {
     try {
       const { userId, business_name, country, is_registered, registration_number, business_address, business_phone, business_email, business_website, business_description, business_logo } = data;
 
@@ -1601,44 +1597,44 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
     }
   }
 
-  async sendPhoneOTP(data: { phone: string, userId: string }) {
-    const { phone, userId } = data;
-    const newPhone = await this.stripePhoneNumber(phone)
-    // 1) Generate the OTP
-    let otp: string;
-    try {
-      otp = await this.getOTP(newPhone, userId);
-    } catch (err: any) {
-      logger.error('OTP generation failed', { phone, error: err });
-      return this.makeResponse(500, 'Error generating OTP');
-    }
+   async sendPhoneOTP(data: { phone: string, userId: string }) {
+     const { phone, userId } = data;
+     const newPhone = await this.stripePhoneNumber(phone);
+     // 1) Generate the OTP
+     let otp: string;
+     try {
+       otp = await this.getOTP(newPhone, userId);
+     } catch (err: any) {
+       logger.error('OTP generation failed', { phone, error: err });
+       return this.makeResponse(500, 'Error generating OTP');
+     }
 
-    // 2) Try WhatsApp template
-    try {
-      const wa = await InfoBipSMS.sendWhatsAppTemplate(newPhone, Number(otp), 'en');
-      if (wa?.success) {
-        logger.info('OTP sent via WhatsApp', { phone });
-        return this.makeResponse(200, 'OTP sent via WhatsApp', wa);
-      }
-      logger.warn('WhatsApp failed, falling back to SMS', { phone, error: wa?.error });
-    } catch (err: any) {
-      logger.error('WhatsApp error', { phone, error: err });
-    }
+     // 2) Try WhatsApp template
+     try {
+       const wa = await InfoBipSMS.sendWhatsAppTemplate(newPhone, Number(otp), 'en');
+       if (wa?.success) {
+         logger.info('OTP sent via WhatsApp', { phone });
+         return this.makeResponse(200, 'OTP sent via WhatsApp', wa);
+       }
+       logger.warn('WhatsApp failed, falling back to SMS', { phone, error: wa?.error });
+     } catch (err: any) {
+       logger.error('WhatsApp error', { phone, error: err });
+     }
 
 
-    if (SMSHelper.isUgandaAirtelNumber(phone)) {
-      const af = await SMSHelper.sendAFSMS(phone, `Your SocialGems OTP is ${otp}`);
-      if (af.success) {
-        logger.info("OTP sent via Africa's Talking SMS", { phone, messageId: af.messageId });
-        return this.makeResponse(200, "OTP sent via Africa's Talking SMS", af);
-      }
+     if (SMSHelper.isUgandaAirtelNumber(phone)) {
+       const af = await SMSHelper.sendAFSMS(phone, `Your SocialGems OTP is ${otp}`);
+       if (af.success) {
+         logger.info("OTP sent via Africa's Talking SMS", { phone, messageId: af.messageId });
+         return this.makeResponse(200, "OTP sent via Africa's Talking SMS", af);
+       }
 
-    } else {
-      const sms = await InfoBipSMS.sendSMS(newPhone, `Your SocialGems OTP is ${otp}`);
-      if (sms.success) {
-        return this.makeResponse(200, 'OTP sent via SMS', sms);
-      }
-    }
+     } else {
+       const sms = await InfoBipSMS.sendSMS(newPhone, `Your SocialGems OTP is ${otp}`);
+       if (sms.success) {
+         return this.makeResponse(200, 'OTP sent via SMS', sms);
+       }
+     }
 
     return this.makeResponse(500, 'Could not send OTP at this time, please try again later');
   }
@@ -1649,162 +1645,143 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
     return this.makeResponse(200, "success", sites);
   }
 
-  async userSocialSites(userId: string) {
-    const sites = await this.callQuerySafe(`select * from sm_site_users u INNER JOIN sm_sites s on u.site_id = s.site_id where user_id='${userId}' `)
-    return this.makeResponse(200, "success", sites);
-  }
+   async userSocialSites(userId: string) {
+     const sites = await this.callQuerySafe(`select * from sm_site_users u INNER JOIN sm_sites s on u.site_id = s.site_id where user_id='${userId}'`);
+     return this.makeResponse(200, "success", sites);
+   }
 
 
 
-  async addSocialSite(data: any) {
-    try {
-      const { site_id, userId, followers, username, link } = data
-      const sites = await this.selectDataQuery('sm_sites', `site_id='${site_id}'`)
-      if (sites.length == 0) {
-        return this.makeResponse(404, 'Site id not found')
-      }
-      const siteInfo = await this.selectDataQuery('sm_site_users', `site_id='${site_id}' AND user_id='${userId}' `)
-      if (siteInfo.length > 0) {
-        return this.makeResponse(400, 'You already added the site')
-      }
+   async addSocialSite(data: any) {
+     try {
+       const { site_id, userId, followers, username, link } = data;
+       const sites = await this.selectDataQuery('sm_sites', `site_id='${site_id}'`);
+       if (sites.length == 0) {
+         return this.makeResponse(404, 'Site id not found');
+       }
+       const siteInfo = await this.selectDataQuery('sm_site_users', `site_id='${site_id}' AND user_id='${userId}'`);
+       if (siteInfo.length > 0) {
+         return this.makeResponse(400, 'You already added the site');
+       }
 
-      const usernameExists = await this.selectDataQuery('sm_site_users', `site_id='${site_id}' AND username='${username}' and is_verified='yes' `)
-      if (usernameExists.length > 0) {
-        return this.makeResponse(400, 'Username for this social site already added and verified')
-      }
+       const usernameExists = await this.selectDataQuery('sm_site_users', `site_id='${site_id}' AND username='${username}' and is_verified='yes' `);
+       if (usernameExists.length > 0) {
+         return this.makeResponse(400, 'Username for this social site already added and verified');
+       }
 
+       let followersCount: any = 0;
 
-      if (siteInfo.length > 0) {
-        return this.makeResponse(400, 'You already added the site')
-      }
-
-      let followersCount: any = 0
-
-      if (site_id == 4) {
-        followersCount = await new InstagramAPI().getFollowers(username)
-        if (followersCount == null) {
-          return this.makeResponse(404, 'Invalid Instagram username')
-        }
-      } else if (site_id == 2) {
+       if (site_id == 4) {
+         followersCount = await new InstagramAPI().getFollowers(username);
+         if (followersCount == null) {
+           return this.makeResponse(404, 'Invalid Instagram username');
+         }
+       } else if (site_id == 2) {
         followersCount = await new TikTokAPIv2().fetchUserFollowers(username)
         if (followersCount == null) {
           return this.makeResponse(404, 'Invalid TikTok username')
         }
-      } else if (site_id == 1) {
-        followersCount = await new RapiAPI().getXFollowers(username)
-        if (followersCount == null) {
-          return this.makeResponse(404, 'Invalid X username')
-        }
-      } else if (site_id == 3) {
-        followersCount = await new FacebookAPI().getFollowers(username)
-        if (followersCount == null) {
-          return this.makeResponse(404, 'Invalid Facebook page')
-        }
-      }
+       } else if (site_id == 1) {
+         followersCount = await new RapiAPI().getXFollowers(username);
+         if (followersCount == null) {
+           return this.makeResponse(404, 'Invalid X username');
+         }
+       } else if (site_id == 3) {
+         followersCount = await new FacebookAPI().getFollowers(username);
+         if (followersCount == null) {
+           return this.makeResponse(404, 'Invalid Facebook page');
+         }
+       }
 
 
-      const newUser = { site_id, user_id: userId, link, followers: followersCount, username };
-      this.rewardGems(data.userId, 2, 'Adding social site')
-      const insertedUser = await this.insertData("sm_site_users", newUser);
-      return this.makeResponse(200, "Added successfully", newUser);
-    } catch (error: any) {
-      console.error("Error in signup:", error);
-      return this.makeResponse(500, error.toString());
-    }
-  }
+       const newUser = { site_id, user_id: userId, link, followers: followersCount, username };
+       this.rewardGems(data.userId, 2, 'Adding social site');
+       const insertedUser = await this.insertData("sm_site_users", newUser);
+       return this.makeResponse(200, "Added successfully", newUser);
+     } catch (error: any) {
+       console.error("Error in signup:", error);
+       return this.makeResponse(500, error.toString());
+     }
+   }
 
 
+   async resyncFollowers(data: any) {
+     const site_id = data.site_id;
 
-  async resyncFollowers(data: any) {
-    const site_id = data.site_id
+     const siteInfo: any = await this.callQuerySafe(
+       `SELECT * 
+      FROM sm_site_users 
+      WHERE is_verified = ? 
+        AND site_id = ? 
+        AND last_synced_at < NOW() - INTERVAL 1 DAY`,
+       ["yes", site_id]
+     );
+     console.log("siteInfo", siteInfo.length);
 
-    const siteInfo: any = await this.callQuerySafe(
-      `SELECT * 
-     FROM sm_site_users 
-     WHERE is_verified = ? 
-       AND site_id = ? 
-       AND last_synced_at < NOW() - INTERVAL 1 DAY`,
-      ["yes", site_id]
-    );
-    console.log("siteInfo", siteInfo.length)
+     for (let i = 0; i < siteInfo.length; i++) {
+       const site_id = siteInfo[i].site_id;
+       const userId = siteInfo[i].user_id;
+       const username = siteInfo[i].username;
+       let followersCount: any = 0;
+       if (site_id == 4) {
+         followersCount = await new InstagramAPI().getFollowers(username);
 
-    for (let i = 0; i < siteInfo.length; i++) {
-      const site_id = siteInfo[i].site_id
-      const userId = siteInfo[i].user_id
-      const username = siteInfo[i].username
-      let followersCount: any = 0
-      if (site_id == 4) {
-        followersCount = await new InstagramAPI().getFollowers(username)
+       } else if (site_id == 2) {
+         followersCount = await new TikTokAPIv2().fetchUserFollowers(username);
 
-      } else if (site_id == 2) {
-        followersCount = await new TikTokAPIv2().fetchUserFollowers(username)
+       } else if (site_id == 1) {
+         followersCount = await new RapiAPI().getXFollowers(username);
 
-      } else if (site_id == 1) {
-        followersCount = await new RapiAPI().getXFollowers(username)
+       } else if (site_id == 3) {
+         followersCount = await new FacebookAPI().getFollowers(username);
+       }
 
-      } else if (site_id == 3) {
-        followersCount = await new FacebookAPI().getFollowers(username)
-      }
+       console.log("resyncFollowers", site_id, username, followersCount);
+       if (followersCount != null && followersCount > 0) {
+         const newUser = { followers: followersCount, last_synced_at: new Date() };
+         await this.updateData("sm_site_users", `site_id='${site_id}' AND user_id='${userId}'`, newUser);
+       }
+     }
+     return this.makeResponse(200, "Followers re-synced successfully");
+   }
 
-      console.log("resyncFollowers", site_id, username, followersCount)
-      if (followersCount != null && followersCount > 0) {
-        const newUser = { followers: followersCount, last_synced_at: new Date() };
-        await this.updateData("sm_site_users", `site_id='${site_id}' AND user_id='${userId}'`, newUser);
-      }
-    }
-    return this.makeResponse(200, "Followers re-synced successfully");
-  }
+   async editSocialSite(data: any) {
+     try {
+       logger.info(`editSocialSite`, data);
+       const { site_id, userId, followers, username, link } = data;
 
-  async editSocialSite(data: any) {
-    try {
-      logger.info(`editSocialSite`, data)
-      const { site_id, userId, followers, username, link } = data;
+       // Ensure required fields are provided
+       if (!site_id || !userId) {
+         return this.makeResponse(400, 'Required fields are missing');
+       }
 
-      // Ensure required fields are provided
-      if (!site_id || !userId) {
-        return this.makeResponse(400, 'Required fields are missing');
-      }
+       // Check if the record exists
+       const siteInfo = await this.selectDataQuery(
+         'sm_site_users',
+         `site_id='${site_id}' AND user_id='${userId}'`
+       );
+       if (siteInfo.length === 0) {
+         return this.makeResponse(400, 'Social site not added');
+       }
 
-      const usernameExists = await this.selectDataQuery('sm_site_users', `site_id='${site_id}' AND username='${username}' and is_verified='yes' `)
-      if (usernameExists.length > 0) {
-        return this.makeResponse(400, 'Username for this social site already added and verified')
-      }
-
-      let followersCount: any = 0
-
-
-
-      // Dynamically build the update object
-
-
-
-      // Check if the record exists
-      const siteInfo = await this.selectDataQuery(
-        'sm_site_users',
-        `site_id='${site_id}' AND user_id='${userId}'`
-      );
-      if (siteInfo.length === 0) {
-        return this.makeResponse(400, 'Social site not added');
-      }
-
-      const isVerified = siteInfo[0].is_verified
-      if (isVerified == 'yes') {
-        return this.makeResponse(400, 'You cannot edit the verified social site')
-      }
-      // Fetch followers count based on the site_id
-
-      if (site_id == 2) {
-        followersCount = await new TikTokAPIv2().fetchUserFollowers(username)
-        if (followersCount == null) {
-          return this.makeResponse(404, 'Invalid TikTok username')
-        }
-      } else if (site_id == 1) {
-        followersCount = await new RapiAPI().getXFollowers(username)
-        if (followersCount == null) {
-          return this.makeResponse(404, 'Invalid X username')
-        }
-      } else if (site_id == 4) {
-        followersCount = await new InstagramAPI().getFollowers(username)
+       const isVerified = siteInfo[0].is_verified;
+       if (isVerified == 'yes') {
+         return this.makeResponse(400, 'You cannot edit the verified social site');
+       }
+       // Fetch followers count based on the site_id
+       let followersCount: any = 0;
+       if (site_id == 2) {
+         followersCount = await new TikTokAPIv2().fetchUserFollowers(username);
+         if (followersCount == null) {
+           return this.makeResponse(404, 'Invalid TikTok username');
+         }
+       } else if (site_id == 1) {
+         followersCount = await new RapiAPI().getXFollowers(username);
+         if (followersCount == null) {
+           return this.makeResponse(404, 'Invalid X username');
+         }
+       } else if (site_id == 4) {
+         followersCount = await new InstagramAPI().getFollowers(username);
         if (followersCount == null) {
           return this.makeResponse(404, 'Invalid Instagram username')
         }
@@ -1865,10 +1842,10 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
 
 
 
-  async getUserByReferralCode(referral_code: any) {
-    const userInfo: any = await this.selectDataQuery(`users_profile`, `referral_code='${referral_code}'`);
-    return userInfo
-  }
+   async getUserByReferralCode(referral_code: any) {
+     const userInfo: any = await this.selectDataQuery(`users_profile`, `referral_code='${referral_code}'`);
+     return userInfo;
+   }
 
   async getDeletedAccount(user_id: string) {
     const deleteRequest: any = await this.selectDataQuery(`delete_requests`, `influencer_id='${user_id}' AND status='pending'`);
@@ -1878,38 +1855,36 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
     return null;
   }
 
-  async requestAccountDeletion(data: any) {
-    console.log("requestAccountDeletion", data)
+   async requestAccountDeletion(data: any) {
+     console.log("requestAccountDeletion", data);
 
-    const { userId, reason } = data;
-    const userInfo: any = await this.selectDataQuery(`users_profile`, `user_id='${userId}'`);
-    if (userInfo.length == 0) {
-      return this.makeResponse(400, "User not found");
-    }
-    const user_id = userInfo[0].user_id
+     const { userId, reason } = data;
+     const userInfo: any = await this.selectDataQuery(`users_profile`, `user_id='${userId}'`);
+     if (userInfo.length == 0) {
+       return this.makeResponse(400, "User not found");
+     }
 
-    this.updateData("users", `user_id='${userId}'`, { status: 'pendingDelete' });
+     this.updateData("users", `user_id='${userId}'`, { status: 'pendingDelete' });
 
-
-    // Create maker-checker request instead of direct deletion
-    try {
-
-      const deleteRequest = {
-        influencer_id: userId,
-        userId,
-        reason,
-        status: 'pending',
-        created_on: new Date()
-      }
-      await this.insertData("delete_requests", deleteRequest);
-      const requestData = {
-        influencer_id: userId,
-        userId,
-        role: 'USER',
-        reason,
-        userInfo: userInfo[0],
-        timestamp: new Date().toISOString()
-      };
+     // Create maker-checker request instead of direct deletion
+     try {
+       const deleteRequest = {
+         influencer_id: userId,
+         userId,
+         reason,
+         status: 'pending',
+         created_on: new Date()
+       }
+       await this.insertData("delete_requests", deleteRequest);
+       
+       const requestData = {
+         influencer_id: userId,
+         userId,
+         role: 'USER',
+         reason,
+         userInfo: userInfo[0],
+         timestamp: new Date().toISOString()
+       };
 
 
       const makerCheckerResult = await makerCheckerHelper.createRequest(
@@ -1945,16 +1920,13 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
 
       for (let i = 0; i < results.length; i++) {
         const result = results[i];
-
-      }
-
-      return this.makeResponse(200, "Delete requests in last 30 days", results);
-    } catch (error: any) {
-      logger.error("Error in getDeleteRequestsIn30Days:", error);
-      return this.makeResponse(500, "Error fetching delete requests");
-    }
-  }
-
+       }
+       return this.makeResponse(200, "Delete requests in last 30 days", results);
+     } catch (error: any) {
+       logger.error("Error in getDeleteRequestsIn30Days:", error);
+       return this.makeResponse(500, "Error fetching delete requests");
+     }
+   }
   async revokeAccountDeletionRequest(data: any) {
     const { userId, reason } = data;
 

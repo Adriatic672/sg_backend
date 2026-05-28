@@ -667,11 +667,10 @@ class Admin extends Model {
 
 
   async getusers() {
-     return await this.callQuerySafe(`SELECT DATE_FORMAT(created_at, '%Y-%m-%d') AS date, COUNT(*) AS users
-FROM users u LEFT JOIN deleted_users d ON u.user_id = d.user_id
-WHERE d.user_id IS NULL
+    return await this.callQuerySafe(`SELECT DATE_FORMAT(created_at, '%Y-%m-%d') AS date, COUNT(*) AS users
+FROM users
 GROUP BY DATE(created_at)
-`);
+ `);
   }
 
 
@@ -777,108 +776,126 @@ INNER JOIN users_profile p ON u.user_id = p.user_id`);
 
 
 
-   async getUsersByRegion() {
-     return await this.callQuerySafe(`SELECT count(*), u.iso_code, p.first_name FROM users u INNER JOIN users_profile p ON u.user_id = p.user_id LEFT JOIN deleted_users d ON u.user_id = d.user_id WHERE d.user_id IS NULL GROUP BY u.iso_code`);
-   }
+  async getUsersByRegion() {
+    return await this.callQuerySafe(`SELECT count(*), iso_code,first_name FROM users_profile  group by iso_code`);
+  }
 
-   async deleteAccount(data: any) {
-     console.log("deleteAccount", data)
-     const { influencer_id, userId, role, reason, adminUserId } = data;
-     const actingAdminId = adminUserId || userId;
+  async deleteAccount(data: any) {
+    console.log("deleteAccount", data)
+    const { influencer_id, userId, role, reason, adminUserId } = data;
+    const actingAdminId = adminUserId || userId;
 
-     try {
-       // Check if user exists
-       const userInfo: any = await this.callQuerySafe(`select * from users where user_id=?`, [influencer_id])
-       if (userInfo.length == 0) {
-         return this.makeResponse(404, "User not found");
-       }
+    try {
+      // Validate admin permissions
+      const adminRole = await this.callQuerySafe(`select * from admin_users where user_id=?`, [actingAdminId])
+      if (adminRole.length == 0) {
+        return this.makeResponse(400, "You are not allowed to delete accounts in this environment");
+      }
+      const userRole = adminRole[0].role;
 
-       // Get admin role for the request data (if needed)
-       const adminRole = await this.callQuerySafe(`select * from admin_users where user_id=?`, [actingAdminId])
-       const userRole = adminRole.length > 0 ? adminRole[0].role : 'ADMIN'; // Default to ADMIN if not found
+      // Check if user exists
+      const userInfo: any = await this.callQuerySafe(`select * from users where user_id=?`, [influencer_id])
+      if (userInfo.length == 0) {
+        return this.makeResponse(404, "User not found");
+      }
 
-       // Create maker-checker request instead of direct deletion
-       const requestData = {
-         influencer_id,
-         userId: actingAdminId,
-         role: role || userRole,
-         reason,
-         userInfo: userInfo[0],
-         timestamp: new Date().toISOString(),
-         adminUserId: actingAdminId
-       };
+      const isProduction = process.env.TABLE_IDENTIFIER !== 'stage';
 
-       // Bypass role and environment checks to execute deletion immediately for the demo
-       return await this.executeDeleteAccount(requestData);
+      // Constraint: Reason must include "requested" in production
+      if (isProduction) {
+        if (!reason || !reason.toLowerCase().includes("requested")) {
+          return this.makeResponse(400, "Reason must include the word 'requested' for audit purposes");
+        }
+      }
 
-     } catch (error: any) {
-       logger.error("Error creating maker-checker request for deleteAccount:", error);
-       logger.error("Delete account error details:", {
-         influencer_id,
-         userId: actingAdminId,
-         role,
-         reason,
-         error_message: error?.message,
-         error_stack: error?.stack
-       });
-       return this.makeResponse(500, "Error creating approval request");
-     }
-   }
+      // Create maker-checker request instead of direct deletion
+      const requestData = {
+        influencer_id,
+        userId: actingAdminId,
+        role: role || userRole,
+        reason,
+        userInfo: userInfo[0],
+        timestamp: new Date().toISOString(),
+        adminUserId: actingAdminId
+      };
+
+      // Logic for SUPER_ADMIN vs Maker-Checker
+      if (userRole === 'SUPER_ADMIN' || !isProduction) {
+        return await this.executeDeleteAccount(requestData);
+      } else {
+        return await makerCheckerHelper.createRequest(
+          'DELETE', 'users', influencer_id, actingAdminId, requestData, 1
+        );
+      }
+
+    } catch (error: any) {
+      logger.error("Error creating maker-checker request for deleteAccount:", error);
+      logger.error("Error in deleteAccount:", error);
+      logger.error("Delete account error details:", {
+        influencer_id,
+        userId: actingAdminId,
+        role,
+        reason,
+        error_message: error?.message,
+        error_stack: error?.stack
+      });
+      return this.makeResponse(500, "Error processing delete account request");
+    }
+  }
 
   /**
    * Execute approved delete account request
    * This function is called when a maker-checker request is approved
    */
-async executeDeleteAccount(requestData: any) {
+  async executeDeleteAccount(requestData: any) {
 
-     console.log("executeDeleteAccount", requestData)
-     const { influencer_id, userId, reason, userInfo } = requestData;
+    console.log("executeDeleteAccount", requestData)
+    const { influencer_id, userId, reason, userInfo } = requestData;
 
-     try {
-       const userProfile = await this.getUserProfile(influencer_id);
-       let name = "";
-       if (!userProfile) {
-         return this.makeResponse(404, "User not found");
-       }
+    try {
+      // Fetch profile directly to avoid "undefined method" errors
+      const profiles: any = await this.callQuerySafe(`SELECT * FROM users_profile WHERE user_id = ?`, [influencer_id]);
+      if (!profiles || profiles.length === 0) {
+        return this.makeResponse(404, "User profile not found");
+      }
 
-       name = userProfile.first_name || userProfile.username;
+      const userProfile = profiles[0];
+      const name = userProfile.first_name || userProfile.username || "User";
+      const email = userProfile.email || (userInfo && userInfo.email);
 
-       // Log the operation
-       this.logOperation("deleteAccount", userId, influencer_id, userInfo);
+      // Log the operation
+      this.logOperation("deleteAccount", userId, influencer_id, { email, reason });
 
-       this.beginTransaction()
-       
-       // Save deletion record (for JWT blocking)
-       const saveDeleteUser = {
-         user_id: influencer_id,
-         deleted_by: userId,
-         reason: reason,
-         status: 'deleted'
-       };
-       await this.insertData("deleted_users", saveDeleteUser);
+      this.beginTransaction();
 
-       // Execute the actual deletion from tables (same order as deactivateBrand)
-       await this.callQuerySafe(`DELETE FROM users WHERE user_id = '${influencer_id}'`);
-       await this.callQuerySafe(`DELETE FROM sm_site_users WHERE user_id = '${influencer_id}'`);
-       await this.callQuerySafe(`DELETE FROM users_profile WHERE user_id = '${influencer_id}'`);
-       await this.callQuerySafe(`DELETE FROM business_profile WHERE business_id = '${influencer_id}'`);
+      // Execute the actual deletion
+      await this.callQuerySafe(`DELETE FROM users WHERE user_id = ?`, [influencer_id]);
+      await this.callQuerySafe(`DELETE FROM sm_site_users WHERE user_id = ?`, [influencer_id]);
+      await this.callQuerySafe(`DELETE FROM users_profile WHERE user_id = ?`, [influencer_id]);
+      await this.callQuerySafe(`DELETE FROM business_profile WHERE business_id = ?`, [influencer_id]);
 
-       await this.commitTransaction()
-       this.logOperation("deleteAccount", userId, influencer_id, requestData);
+      await this.commitTransaction();
 
-       // Send notification email
-       const email = userInfo.email || userProfile.email;
-       this.sendEmail("DELETE_ACCOUNT", email, name);
+      // Send notification email
+      this.sendEmail("DELETE_ACCOUNT", email, name);
 
-       return this.makeResponse(200, "Account deleted successfully");
-     } catch (error) {
-       this.logOperation("deleteAccount", userId, influencer_id, requestData);
-       
-       logger.error("Error in executeDeleteAccount:", error);
-       await this.rollbackTransaction()
-       return this.makeResponse(500, "Error deleting account", error);
-     }
-   }
+      // Save deletion record
+      const saveDeleteUserRecord = {
+        user_id: influencer_id,
+        deleted_by: userId,
+        reason: reason,
+        status: 'deleted'
+      };
+      await this.insertData("deleted_users", saveDeleteUserRecord);
+
+      return this.makeResponse(200, "Account deleted successfully");
+    } catch (error) {
+      logger.error("Error in executeDeleteAccount:", error);
+      this.logOperation("deleteAccount", userId, influencer_id, requestData);
+      await this.rollbackTransaction();
+      return this.makeResponse(500, "Error deleting account", error);
+    }
+  }
 
   async deactivateBrand(data: any) {
     console.log("deactivateBrand", data)
@@ -1202,22 +1219,20 @@ COALESCE(p.username, 'admin') AS username,
 
   async getStats() {
 
-     const totalUsers: any = await this.callQuerySafe(`SELECT COUNT(*) AS users FROM users u LEFT JOIN deleted_users d ON u.user_id = d.user_id WHERE u.user_type='influencer' AND d.user_id IS NULL`);
-     const brandUsers: any = await this.callQuerySafe(`SELECT COUNT(*) AS users FROM users u LEFT JOIN deleted_users d ON u.user_id = d.user_id WHERE u.user_type='brand' AND d.user_id IS NULL`);
+    const totalUsers: any = await this.callQuerySafe(`SELECT COUNT(*) AS users FROM users WHERE user_type='influencer'`);
+    const brandUsers: any = await this.callQuerySafe(`SELECT COUNT(*) AS users FROM users WHERE user_type='brand'`);
     const activeCampaigns: any = await this.callQuerySafe(`SELECT COUNT(*) AS users FROM act_campaigns WHERE status !='completed' and status !='draft'`);
     const totalTasks: any = await this.callQuerySafe(`SELECT COUNT(*) AS users FROM act_tasks`);
     const totalCampaigns: any = await this.callQuerySafe(`SELECT COUNT(*) AS users FROM act_campaigns where status !='draft'`);
     const completedCampaigns: any = await this.callQuerySafe(`SELECT COUNT(*) AS users FROM act_campaigns WHERE status='completed'`);
 
-     // Onboarding: influencers with at least one social account connected
-     const onboardedUsers: any = await this.callQuerySafe(`
-       SELECT COUNT(DISTINCT u.user_id) AS onboarded
-       FROM users u
-       INNER JOIN sm_site_users s ON u.user_id = s.user_id
-       LEFT JOIN deleted_users d ON u.user_id = d.user_id
-       WHERE u.user_type = 'influencer'
-       AND d.user_id IS NULL
-     `);
+    // Onboarding: influencers with at least one social account connected
+    const onboardedUsers: any = await this.callQuerySafe(`
+      SELECT COUNT(DISTINCT u.user_id) AS onboarded
+      FROM users u
+      INNER JOIN sm_site_users s ON u.user_id = s.user_id
+      WHERE u.user_type = 'influencer'
+    `);
 
     const totalInfluencers = totalUsers[0].users;
     const onboarded = onboardedUsers[0].onboarded;
@@ -1610,30 +1625,30 @@ COALESCE(p.username, 'admin') AS username,
     }
     return resp;
   }
-   async viewUsers(usertype: string, iso_code = 'all', level_id?: string, industry_ids?: string) {
-     let ext = ''
-     if (iso_code != 'all' && iso_code != undefined && iso_code.length > 1) {
-       ext += ` AND p.iso_code='${iso_code}'`
-     }
-     if (level_id && level_id !== 'ALL') {
-       ext += ` AND u.level_id=${level_id}`
-     }
-     if (industry_ids && industry_ids !== 'ALL') {
-       const industryIdArray = industry_ids.split(',').map(id => id.trim());
-       if (industryIdArray.length > 0) {
-         ext += ` AND p.industry_id IN (${industryIdArray.join(',')})`
-       }
-     }
+  async viewUsers(usertype: string, iso_code = 'all', level_id?: string, industry_ids?: string) {
+    let ext = ''
+    if (iso_code != 'all' && iso_code != undefined && iso_code.length > 1) {
+      ext += ` AND p.iso_code='${iso_code}'`
+    }
+    if (level_id && level_id !== 'ALL') {
+      ext += ` AND u.level_id=${level_id}`
+    }
+    if (industry_ids && industry_ids !== 'ALL') {
+      const industryIdArray = industry_ids.split(',').map(id => id.trim());
+      if (industryIdArray.length > 0) {
+        ext += ` AND p.industry_id IN (${industryIdArray.join(',')})`
+      }
+    }
 
-     const resp: any = await this.callQuerySafe(`select p.*,u.email,u.level_id,u.is_social_verified,u.subscription_tier from users u inner join users_profile p on u.user_id = p.user_id left join deleted_users d on u.user_id = d.user_id where user_type ='${usertype}' and d.user_id is null ${ext} order by u.subscription_tier DESC, u.id desc `)
+    const resp: any = await this.callQuerySafe(`select p.*,u.email,u.level_id,u.is_social_verified,u.subscription_tier from users u inner join users_profile p on u.user_id = p.user_id where user_type ='${usertype}' ${ext} order by u.subscription_tier DESC, u.id desc `)
 
-     for (let i = 0; i < resp.length; i++) {
-       const user = resp[i];
-       const socialAccounts = await this.getSocialAccounts(user.user_id);
-       resp[i].social_accounts = socialAccounts;
-     }
-     return resp;
-   }
+    for (let i = 0; i < resp.length; i++) {
+      const user = resp[i];
+      const socialAccounts = await this.getSocialAccounts(user.user_id);
+      resp[i].social_accounts = socialAccounts;
+    }
+    return resp;
+  }
 
   async filterCreators(params: {
     location?: string;
@@ -1677,34 +1692,30 @@ COALESCE(p.username, 'admin') AS username,
       where += ` AND (p.first_name LIKE '%${safe}%' OR p.last_name LIKE '%${safe}%' OR p.username LIKE '%${safe}%')`;
     }
 
-     const countResult: any = await this.callQuerySafe(`
-       SELECT COUNT(*) AS total
-       FROM users u
-       INNER JOIN users_profile p ON u.user_id = p.user_id
-       LEFT JOIN deleted_users d ON u.user_id = d.user_id
-       WHERE d.user_id IS NULL
-       ${where}
-     `);
+    const countResult: any = await this.callQuerySafe(`
+      SELECT COUNT(*) AS total
+      FROM users u
+      INNER JOIN users_profile p ON u.user_id = p.user_id
+      ${where}
+    `);
     const total = countResult[0]?.total ?? 0;
 
-     const rows: any = await this.callQuerySafe(`
-       SELECT
-         p.user_id, p.username, p.first_name, p.last_name, p.profile_pic,
-         p.iso_code, p.influencer_rating,
-         p.reliability_score, p.reliability_score_updated_at,
-         p.content_best_at, p.industry_ids,
-         p.gender, p.created_on,
-         u.email, u.level_id, u.is_social_verified,
-         l.level_name
-       FROM users u
-       INNER JOIN users_profile p ON u.user_id = p.user_id
-       LEFT JOIN levels l ON u.level_id = l.id
-       LEFT JOIN deleted_users d ON u.user_id = d.user_id
-       WHERE d.user_id IS NULL
-       ${where}
-       ORDER BY p.reliability_score DESC, p.influencer_rating DESC, p.created_on DESC
-       LIMIT ${limitNum} OFFSET ${offset}
-     `);
+    const rows: any = await this.callQuerySafe(`
+      SELECT
+        p.user_id, p.username, p.first_name, p.last_name, p.profile_pic,
+        p.iso_code, p.influencer_rating,
+        p.reliability_score, p.reliability_score_updated_at,
+        p.content_best_at, p.industry_ids,
+        p.gender, p.created_on,
+        u.email, u.level_id, u.is_social_verified,
+        l.level_name
+      FROM users u
+      INNER JOIN users_profile p ON u.user_id = p.user_id
+      LEFT JOIN levels l ON u.level_id = l.id
+      ${where}
+      ORDER BY p.reliability_score DESC, p.influencer_rating DESC, p.created_on DESC
+      LIMIT ${limitNum} OFFSET ${offset}
+    `);
 
     return this.makeResponse(200, 'success', {
       creators: rows,

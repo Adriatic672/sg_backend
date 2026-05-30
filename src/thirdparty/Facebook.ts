@@ -26,6 +26,48 @@ export default class FacebookAPI {
     return this.axiosInstance.post(url, data, config);
   }
 
+  private parseCount(value: any): number | null {
+    if (typeof value === 'number' && Number.isFinite(value)) return Math.floor(value);
+    if (typeof value !== 'string') return null;
+
+    const normalized = value.trim().toLowerCase().replace(/,/g, '');
+    if (!normalized) return null;
+
+    const match = normalized.match(/^(\d+(?:\.\d+)?)([kmb])?$/);
+    if (!match) {
+      const parsed = Number(normalized);
+      return Number.isFinite(parsed) ? Math.floor(parsed) : null;
+    }
+
+    const amount = Number(match[1]);
+    const suffix = match[2];
+    const multiplier = suffix === 'k' ? 1_000 : suffix === 'm' ? 1_000_000 : suffix === 'b' ? 1_000_000_000 : 1;
+    return Math.floor(amount * multiplier);
+  }
+
+  private followerCountFromPayload(data: any): number {
+    const results = data?.results || data?.result || data?.data || data || {};
+    const candidates = [
+      results?.followers,
+      results?.followers_count,
+      results?.follower_count,
+      results?.likes,
+      results?.likes_count,
+      results?.fan_count,
+      data?.followers,
+      data?.followers_count,
+      data?.follower_count,
+      data?.fan_count,
+    ];
+
+    for (const value of candidates) {
+      const count = this.parseCount(value);
+      if (count !== null) return count;
+    }
+
+    return 0;
+  }
+
   /**
    * Fetch follower count from a Facebook page.
    * @param pageUrl Full Facebook page URL (e.g. https://facebook.com/facebook)
@@ -36,7 +78,7 @@ export default class FacebookAPI {
       console.log('getFourl)', pageUrl);
       const response = await this.get('/page/details', { url: pageUrl });
       console.log('getFourl2', response.data.results);
-      const count = response.data?.results.followers || 0;
+      const count = this.followerCountFromPayload(response.data);
       return count;
     } catch (error) {
       console.error("Error fetching followers from Facebook:", error);

@@ -20,6 +20,48 @@ export default class RapiAPI {
     return this.axiosInstance.post(url, data, config);
   }
 
+  private parseCount(value: any): number | null {
+    if (typeof value === 'number' && Number.isFinite(value)) return Math.floor(value);
+    if (typeof value !== 'string') return null;
+
+    const normalized = value.trim().toLowerCase().replace(/,/g, '');
+    if (!normalized) return null;
+
+    const match = normalized.match(/^(\d+(?:\.\d+)?)([kmb])?$/);
+    if (!match) {
+      const parsed = Number(normalized);
+      return Number.isFinite(parsed) ? Math.floor(parsed) : null;
+    }
+
+    const amount = Number(match[1]);
+    const suffix = match[2];
+    const multiplier = suffix === 'k' ? 1_000 : suffix === 'm' ? 1_000_000 : suffix === 'b' ? 1_000_000_000 : 1;
+    return Math.floor(amount * multiplier);
+  }
+
+  private followerCountFromPayload(data: any): number {
+    const result = data?.data?.user?.result || data?.user?.result || data?.result || data || {};
+    const legacy = result?.legacy || data?.legacy || {};
+    const publicMetrics = result?.public_metrics || data?.public_metrics || {};
+    const candidates = [
+      legacy?.followers_count,
+      legacy?.normal_followers_count,
+      legacy?.favourites_count,
+      publicMetrics?.followers_count,
+      result?.followers_count,
+      result?.followers,
+      data?.followers_count,
+      data?.followers,
+    ];
+
+    for (const value of candidates) {
+      const count = this.parseCount(value);
+      if (count !== null) return count;
+    }
+
+    return 0;
+  }
+
   // Resolve username -> userId using UserByScreenName
   private async resolveUserId(screenname: string): Promise<string | null> {
     try {
@@ -136,10 +178,11 @@ export default class RapiAPI {
       const result = response.data?.data?.user?.result;
       const legacy = result?.legacy;
       console.log('Twitter getUserInfo response:', legacy);
+      const followersCount = this.followerCountFromPayload(response.data);
       return {
         user: {
           id: result?.rest_id || '',
-          followers_count: legacy?.followers_count || 0,
+          followers_count: followersCount,
           verified: legacy?.verified || result?.is_blue_verified || false,
           location: legacy?.location || '',
           created_at: legacy?.created_at || '',

@@ -34,6 +34,52 @@ export default class TikTokAPIv2 {
         return false;
     }
 
+    private parseCount(value: any): number | null {
+        if (typeof value === 'number' && Number.isFinite(value)) return Math.floor(value);
+        if (typeof value !== 'string') return null;
+
+        const normalized = value.trim().toLowerCase().replace(/,/g, '');
+        if (!normalized) return null;
+
+        const match = normalized.match(/^(\d+(?:\.\d+)?)([kmb])?$/);
+        if (!match) {
+            const parsed = Number(normalized);
+            return Number.isFinite(parsed) ? Math.floor(parsed) : null;
+        }
+
+        const amount = Number(match[1]);
+        const suffix = match[2];
+        const multiplier = suffix === 'k' ? 1_000 : suffix === 'm' ? 1_000_000 : suffix === 'b' ? 1_000_000_000 : 1;
+        return Math.floor(amount * multiplier);
+    }
+
+    private followerCountFromPayload(data: any): number {
+        const userInfo = data?.userInfo || data?.data?.userInfo || data?.data || data || {};
+        const user = userInfo?.user || data?.user || {};
+        const stats = userInfo?.stats || user?.stats || data?.stats || data?.data?.stats || {};
+        const candidates = [
+            stats?.followerCount,
+            stats?.followers,
+            stats?.follower_count,
+            stats?.followers_count,
+            user?.followerCount,
+            user?.followers,
+            user?.follower_count,
+            user?.followers_count,
+            data?.followerCount,
+            data?.followers,
+            data?.follower_count,
+            data?.followers_count,
+        ];
+
+        for (const value of candidates) {
+            const count = this.parseCount(value);
+            if (count !== null) return count;
+        }
+
+        return 0;
+    }
+
     // Enhanced method to get comprehensive user analytics
     public async getUserAnalytics(username: string): Promise<any> {
         try {
@@ -84,14 +130,14 @@ export default class TikTokAPIv2 {
                 user: {
                     id: userData.id,
                     username: userData.nickname,
-                    followers_count: userData.stats?.followerCount || 0,
+                    followers_count: this.followerCountFromPayload(response.data),
                     verified: userData.verified || false,
                     secUid: userData.secUid,
                     location: userData.region || 'Unknown',
                     region: userData.region || 'Unknown',
                     category: 'General'
                 },
-                followers: userData.stats?.followerCount || 0,
+                followers: this.followerCountFromPayload(response.data),
                 verified: userData.verified || false,
                 region: userData.region || 'Unknown',
                 category: 'General'
@@ -156,11 +202,7 @@ export default class TikTokAPIv2 {
             const response = await this.get('/api/user/info-with-region', { uniqueId: screenname });
             console.log('fetchUserFollowers', response.data);
 
-            const followerCount = response.data.userInfo.stats.followerCount;
-            if (typeof followerCount === 'number') {
-                return followerCount;
-            }
-            return 0;
+            return this.followerCountFromPayload(response.data);
         } catch (error) {
             console.error("Error fetching followers from TikTok:", error);
             return 0;

@@ -4,11 +4,13 @@ import { getItem, setItem } from "../helpers/connectRedis";
 import Stripe from 'stripe';
 import { getUserTier } from '../helpers/subscriptionTier';
 import RelworxMobileMoney from "../thirdparty/Relworx";
+import GempayProvider from "../thirdparty/Gempay";
 import crypto from 'crypto';
 import { logger } from '../utils/logger';
 import cloudWatchLogger from '../helpers/cloudwatch.helper';
 
 const mm = new RelworxMobileMoney()
+const gempay = new GempayProvider()
 
 let _stripe: Stripe | null = null;
 function getStripe(): Stripe {
@@ -195,6 +197,110 @@ export default class Payments extends Model {
     } catch (error: any) {
       cloudWatchLogger.error("Error handling webhook", error, { data });
       return this.makeResponse(500, "Error handling webhook");
+    }
+  }
+
+  async webhookGempay(data: any) {
+    try {
+      console.log("webhookGempay", data);
+      const reference = data.external_reference
+        || data.customer_reference
+        || data.reference
+        || data.transactionId
+        || data.transaction_id
+        || data.trans_id
+        || data.data?.external_reference
+        || data.data?.reference
+        || data.data?.transactionId;
+      const providerReference = data.internal_reference
+        || data.provider_reference
+        || data.gempay_reference
+        || data.data?.internal_reference
+        || data.data?.reference
+        || reference;
+      const rawStatus = String(data.status || data.transaction_status || data.data?.status || "").toLowerCase();
+
+      this.logOperation("GEMPAY_WEBHOOK", providerReference, reference, data);
+
+      if (!reference) {
+        return this.makeResponse(400, "Reference is required");
+      }
+
+      const successStatuses = ["success", "successful", "paid", "completed", "received"];
+      const failedStatuses = ["failed", "failure", "cancelled", "canceled", "reversed", "declined"];
+      const isSuccess = successStatuses.includes(rawStatus);
+      const isFailure = failedStatuses.includes(rawStatus);
+
+      const kesReq: any = await this.callQuerySafe(
+        `SELECT request_id, user_id, amount, status AS req_status
+         FROM kes_withdrawal_requests WHERE request_id = ? LIMIT 1`,
+        [reference]
+      );
+
+      if (kesReq && kesReq.length > 0) {
+        const req = kesReq[0];
+        if (["PAID", "REVERSED", "FAILED"].includes(req.req_status)) {
+          return this.makeResponse(200, "Already processed");
+        }
+
+        if (isSuccess) {
+          await this.callQuerySafe(
+            `UPDATE kes_withdrawal_requests
+             SET status = 'PAID', relworx_ref = ?, updated_at = NOW()
+             WHERE request_id = ?`,
+            [providerReference, reference]
+          );
+          this.sendAppNotification(
+            req.user_id, "KES_WITHDRAWAL_SUCCESS",
+            "", req.amount.toString(), "", providerReference || "", "WALLET"
+          );
+          return this.makeResponse(200, "KES withdrawal webhook processed");
+        }
+
+        if (isFailure) {
+          await this.callQuerySafe(
+            `UPDATE kes_withdrawal_requests
+             SET status = 'REVERSED', failure_reason = ?, updated_at = NOW()
+             WHERE request_id = ?`,
+            [data.message || "Gempay payout failed", reference]
+          );
+          await this.callQuerySafe(
+            `UPDATE user_wallets
+             SET balance_available = balance_available + ?,
+                 balance           = balance + ?,
+                 total_withdrawn   = GREATEST(0, total_withdrawn - ?),
+                 updated_at        = NOW()
+             WHERE user_id = ? AND asset = 'KES'`,
+            [req.amount, req.amount, req.amount, req.user_id]
+          );
+          this.sendAppNotification(
+            req.user_id, "KES_WITHDRAWAL_FAILED",
+            "", req.amount.toString(), data.message || "Payout reversed", "", "WALLET"
+          );
+          return this.makeResponse(200, "KES withdrawal reversed");
+        }
+
+        return this.makeResponse(200, "KES withdrawal still pending");
+      }
+
+      const transaction: any = await this.callQuerySafe(
+        `SELECT * FROM wl_transactions WHERE trans_id = ? LIMIT 1`,
+        [reference]
+      );
+      if (!transaction || transaction.length === 0) {
+        return this.makeResponse(404, "Transaction not found");
+      }
+
+      if (transaction[0].trans_type === "DEPOSIT") {
+        if (isSuccess) return await this.completePendingDeposit(reference, Number(transaction[0].amount || 0), "success");
+        if (isFailure) return await this.completePendingDeposit(reference, Number(transaction[0].amount || 0), "failed");
+        return this.makeResponse(200, "Deposit still pending");
+      }
+
+      return this.makeResponse(200, "Webhook received");
+    } catch (error: any) {
+      cloudWatchLogger.error("Error handling Gempay webhook", error, { data });
+      return this.makeResponse(500, "Error handling Gempay webhook");
     }
   }
 
@@ -817,7 +923,7 @@ export default class Payments extends Model {
 
 
       // MOCK PAYMENT: If we are in dev/local/debug, skip the real payment gateway
-      if (paymentMethod === "MOBILE" && process.env.ENVIRONMENT !== 'production') {
+      if (paymentMethod === "MOBILE" && process.env.ENVIRONMENT !== 'production' && !gempay.enabled) {
         logger.info(`[Mock Payment] Skipping Relworx call for ${refId} in ${process.env.ENVIRONMENT} mode`);
 
         // 1. Update transaction status to SUCCESS
@@ -833,6 +939,28 @@ export default class Payments extends Model {
       }
 
       if (paymentMethod == "MOBILE") {
+        if (gempay.enabled) {
+          logger.info(`[Gempay] Initiating mobile deposit: Ref=${refId}, Acc=${account_number}, Amt=${request_amount} ${request_currency}`);
+          const requestPayment = await gempay.initiateMobileDeposit({
+            reference: refId,
+            userId,
+            amount: Number(request_amount),
+            currency: request_currency,
+            phoneNumber: account_number,
+            redirectUrl: redirect_url,
+          });
+          logger.info("gempayDepositResponse", requestPayment);
+          if (![200, 201, 202].includes(requestPayment.status)) {
+            return this.makeResponse(400, requestPayment.message || "Failed to request payment", requestPayment.data);
+          }
+          return this.makeResponse(200, requestPayment.message || "Deposit request sent", {
+            ...requestPayment.data,
+            trans_id: refId,
+            status: "PENDING",
+            provider: "GEMPAY",
+          });
+        }
+
         logger.info(`[Relworx] Initiating Payment: Ref=${refId}, Acc=${account_number}, Amt=${request_amount} ${request_currency}`);
         const requestPayment = await mm.requestPayment(refId, account_number, request_currency, request_amount, "DEPOSIT REQUEST")
         logger.info("requestPayment", requestPayment)
@@ -1331,6 +1459,65 @@ export default class Payments extends Model {
     } catch (_) {
       // walletTransfer logging failure must not abort the payout.
       logger.warn('kesWithdraw: walletTransfer log failed', { trans_id });
+    }
+
+    if (gempay.enabled) {
+      const gempayResponse = await gempay.initiateMobilePayout({
+        reference: request_id,
+        userId,
+        amount,
+        currency: 'KES',
+        phoneNumber: phone,
+        note: 'SocialGems Earnings',
+      });
+      logger.info('kesWithdraw Gempay response', { request_id, response: gempayResponse });
+
+      if ([200, 201, 202].includes(gempayResponse.status)) {
+        const gempay_ref = gempayResponse.data?.internal_reference
+          || gempayResponse.data?.reference
+          || gempayResponse.data?.transactionId
+          || request_id;
+
+        await this.callQuerySafe(
+          `UPDATE kes_withdrawal_requests
+           SET status = 'PROCESSING', relworx_ref = ?, updated_at = NOW()
+           WHERE request_id = ?`,
+          [gempay_ref, request_id]
+        );
+
+        return this.makeResponse(200, `Withdrawal request submitted for KES ${amount} to ${phone}.`, {
+          request_id,
+          gempay_ref,
+          amount,
+          msisdn: phone,
+          provider: 'GEMPAY',
+          status: 'PROCESSING',
+        });
+      }
+
+      const reason = gempayResponse.message || 'Gempay payout failed';
+      await this.callQuerySafe(
+        `UPDATE kes_withdrawal_requests
+         SET status = 'FAILED', failure_reason = ?, retry_count = retry_count + 1, updated_at = NOW()
+         WHERE request_id = ?`,
+        [reason, request_id]
+      );
+
+      await this.callQuerySafe(
+        `UPDATE user_wallets
+         SET balance_available = balance_available + ?,
+             balance           = balance + ?,
+             total_withdrawn   = GREATEST(0, total_withdrawn - ?),
+             updated_at        = NOW()
+         WHERE user_id = ? AND asset = 'KES'`,
+        [totalDeduct, totalDeduct, totalDeduct, userId]
+      );
+
+      this.sendAppNotification(
+        userId, 'KES_WITHDRAWAL_FAILED',
+        '', amount.toString(), reason, '', 'WALLET'
+      );
+      return this.makeResponse(400, `Withdrawal failed: ${reason}. Your balance has been restored.`);
     }
 
     // ── 7. Trigger Relworx B2C payout ─────────────────────────────────────

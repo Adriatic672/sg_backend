@@ -1,19 +1,59 @@
 import Model from "../helpers/model";
+import { getUserTier, tierAtLeast, type SubscriptionTier } from "../helpers/subscriptionTier";
 import { logger } from "../utils/logger";
 import ChatModel from "./chat.model";
 
-const FREE_POST_LIMIT = 3;
+const FREE_POST_LIMIT = 2;
+type JobAccessTier = SubscriptionTier;
 
 export default class JobBoard extends Model {
   constructor() {
     super();
   }
 
+  private normaliseCompType(compType?: string | null): string {
+    return (compType || "").toString().trim().toLowerCase();
+  }
+
+  private isFreeProductOrService(compType?: string | null): boolean {
+    return ["product", "service", "barter"].includes(this.normaliseCompType(compType));
+  }
+
+  private deriveJobAccessTier(compType?: string | null, compAmount?: any): JobAccessTier {
+    const type = this.normaliseCompType(compType);
+    const amount = Number(compAmount || 0);
+
+    if (type === "affiliate") return "plus";
+    if (this.isFreeProductOrService(type)) return "free";
+    if (amount >= 25000) return "pro";
+    if (amount > 0) return "plus";
+    return "free";
+  }
+
+  private formatJobRow(row: any) {
+    const compType = row.comp_type || "cash";
+    return {
+      ...row,
+      access_tier: row.access_tier || this.deriveJobAccessTier(compType, row.comp_amount),
+      comp_amount: Number(row.comp_amount || 0),
+      min_followers: Number(row.min_followers || 0),
+      niche: row.niche || "",
+      comp_currency: row.comp_currency || "KES",
+      comp_type: compType,
+    };
+  }
+
   // ─── Quota ────────────────────────────────────────────────────────────────
 
-  async checkPostQuota(brandId: string): Promise<{ canPost: boolean; requiresUpgrade?: boolean }> {
+  async checkPostQuota(brandId: string, compType?: string): Promise<{ canPost: boolean; requiresUpgrade?: boolean }> {
+    if (!this.isFreeProductOrService(compType)) return { canPost: true };
+
     const rows: any[] = await this.callQuerySafe(
-      `SELECT COUNT(*) AS total FROM jb_job_posts WHERE brand_id = ? AND status != 'deleted'`,
+      `SELECT COUNT(*) AS total
+       FROM jb_job_posts
+       WHERE brand_id = ?
+         AND status != 'deleted'
+         AND LOWER(COALESCE(comp_type, '')) IN ('product', 'service', 'barter')`,
       [brandId]
     );
     const total = Number(rows[0]?.total ?? 0);
@@ -49,18 +89,19 @@ export default class JobBoard extends Model {
       }
     }
 
-    const quota = await this.checkPostQuota(userId);
+    const quota = await this.checkPostQuota(userId, comp_type);
     if (!quota.canPost) {
       // Generate upgrade URL for brand to upgrade their account
       const domain = process.env.DOMAIN || process.env.PROD_DOMAIN || 'https://socialgems.me';
       const upgradeUrl = `${domain}/upgrade?brand=${userId}`;
-      return this.makeResponse(402, "Free job post limit reached. Upgrade to post more.", {
+      return this.makeResponse(402, `Free product/service job post limit reached. Upgrade after ${FREE_POST_LIMIT} free posts.`, {
         requiresUpgrade: true,
         checkoutUrl: upgradeUrl,
       });
     }
 
     const job_id = this.getRandomString();
+    const access_tier = this.deriveJobAccessTier(comp_type, comp_amount);
     await this.insertData("jb_job_posts", {
       job_id,
       brand_id: userId,
@@ -69,6 +110,7 @@ export default class JobBoard extends Model {
       comp_amount: comp_amount ?? 0,
       comp_currency: comp_currency ?? "KES",
       comp_type: comp_type ?? "cash",
+      access_tier,
       min_followers: min_followers ?? 0,
       niche: niche ?? null,
       deadline,
@@ -77,7 +119,7 @@ export default class JobBoard extends Model {
       guidelines_text: guidelines_text ?? null,
     });
 
-    return this.makeResponse(200, "Job posted successfully", { job_id, campaign_id });
+    return this.makeResponse(200, "Job posted successfully", { job_id, campaign_id, access_tier });
   }
 
   async closeJob(data: any) {
@@ -132,7 +174,7 @@ export default class JobBoard extends Model {
 
     // Check if job exists and belongs to the brand
     const job: any[] = await this.callQuerySafe(
-      `SELECT job_id, brand_id, status FROM jb_job_posts WHERE job_id = ? LIMIT 1`,
+      `SELECT job_id, brand_id, status, comp_type, comp_amount FROM jb_job_posts WHERE job_id = ? LIMIT 1`,
       [job_id]
     );
     if (job.length === 0) return this.makeResponse(404, "Job not found");
@@ -156,6 +198,13 @@ export default class JobBoard extends Model {
     if (guidelines_text !== undefined) updateFields.guidelines_text = guidelines_text;
     if (guidelines_attachment !== undefined) updateFields.guidelines_attachment = guidelines_attachment;
     if (campaign_id !== undefined) updateFields.campaign_id = campaign_id;
+
+    if (comp_amount !== undefined || comp_type !== undefined) {
+      updateFields.access_tier = this.deriveJobAccessTier(
+        comp_type !== undefined ? comp_type : job[0].comp_type,
+        comp_amount !== undefined ? comp_amount : job[0].comp_amount
+      );
+    }
 
     // If no fields to update, return early
     if (Object.keys(updateFields).length === 0) {
@@ -218,13 +267,8 @@ export default class JobBoard extends Model {
       [userId]
     );
     const formattedRows = rows.map(row => ({
-      ...row,
+      ...this.formatJobRow(row),
       interest_count: Number(row.interest_count || 0),
-      comp_amount: Number(row.comp_amount || 0),
-      min_followers: Number(row.min_followers || 0),
-      niche: row.niche || '',
-      comp_currency: row.comp_currency || 'KES',
-      comp_type: row.comp_type || 'cash',
       guidelines_attachment: row.guidelines_attachment || null,
       guidelines_text: row.guidelines_text || null,
       description: row.description || ''
@@ -900,15 +944,10 @@ export default class JobBoard extends Model {
       [userId ?? ""]
     );
     const formattedRows = rows.map(row => ({
-      ...row,
+      ...this.formatJobRow(row),
       my_interest_status: row.my_interest_status || 'none',
-      comp_amount: Number(row.comp_amount || 0),
-      min_followers: Number(row.min_followers || 0),
-      niche: row.niche || '',
       business_name: row.business_name || 'Unknown Business',
-      logo: row.logo || '',
-      comp_currency: row.comp_currency || 'KES',
-      comp_type: row.comp_type || 'cash'
+      logo: row.logo || ''
     }));
     return this.makeResponse(200, "success", formattedRows);
   }
@@ -939,15 +978,10 @@ export default class JobBoard extends Model {
 
     const row = rows[0];
     const job = {
-      ...row,
+      ...this.formatJobRow(row),
       my_interest_status: row.my_interest_status || 'none',
-      comp_amount: Number(row.comp_amount || 0),
-      min_followers: Number(row.min_followers || 0),
-      niche: row.niche || '',
       business_name: row.business_name || 'Unknown Business',
-      logo: row.logo || '',
-      comp_currency: row.comp_currency || 'KES',
-      comp_type: row.comp_type || 'cash'
+      logo: row.logo || ''
     };
 
     const response = this.makeResponse(200, "success", job);
@@ -962,7 +996,7 @@ export default class JobBoard extends Model {
     if (!job_id) return this.makeResponse(400, "job_id is required");
 
     const job: any[] = await this.callQuerySafe(
-      `SELECT job_id, status, brand_id FROM jb_job_posts WHERE job_id = ? LIMIT 1`,
+      `SELECT job_id, status, brand_id, title, access_tier, comp_type, comp_amount FROM jb_job_posts WHERE job_id = ? LIMIT 1`,
       [job_id]
     );
     console.log('[expressInterest model] job:', job);
@@ -974,6 +1008,22 @@ export default class JobBoard extends Model {
     if (job[0].brand_id === userId) {
       console.log('[expressInterest model] Brand tried to express interest in their own job');
       return this.makeResponse(400, "You cannot express interest in your own job");
+    }
+
+    const requiredTier = (job[0].access_tier || this.deriveJobAccessTier(job[0].comp_type, job[0].comp_amount)) as JobAccessTier;
+    if (requiredTier !== "free") {
+      const userTier = await getUserTier(userId);
+      if (!tierAtLeast(userTier, requiredTier)) {
+        return this.makeResponse(
+          403,
+          `This opportunity is available to Creator ${requiredTier === "pro" ? "Pro" : "Plus"} members.`,
+          {
+            requiresUpgrade: true,
+            requiredTier,
+            currentTier: userTier,
+          }
+        );
+      }
     }
 
     const existing: any[] = await this.callQuerySafe(

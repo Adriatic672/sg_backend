@@ -29,6 +29,7 @@ router.post('/intiatePayment', applyJWTConditionally, InitPayment);
 router.post('/webhook', webhook, bodyParser.raw({ type: 'application/json' }), // Middleware to parse raw body
 );
 router.post('/webhook_rel', webhookRel);
+router.post('/webhook_gempay', webhookGempay);
 
 router.get('/getBalance', applyJWTConditionally, logCount, getBalance);
 router.post('/accountStatement', applyJWTConditionally, accountStatement);
@@ -217,6 +218,25 @@ async function webhookRel(req: Request, res: Response) {
     res.status(200).json(result);
   } catch (error) {
     res.status(500).json({ message: 'Error fetching balance', error });
+  }
+}
+
+async function webhookGempay(req: Request, res: Response) {
+  try {
+    const expectedToken = process.env.GEMPAY_WEBHOOK_TOKEN;
+    if (expectedToken) {
+      const suppliedToken = req.headers['x-gempay-token']
+        || req.headers['x-webhook-token']
+        || req.headers.authorization?.replace('Bearer ', '');
+      if (suppliedToken !== expectedToken) {
+        return res.status(401).json({ status: 401, message: 'Invalid webhook token' });
+      }
+    }
+
+    const result = await pay.webhookGempay(req.body);
+    res.status(result.status).json(result);
+  } catch (error) {
+    res.status(500).json({ message: 'Error processing Gempay webhook', error });
   }
 }
 

@@ -71,9 +71,11 @@ export default class GempayProvider {
   }
 
   async initiateMobileDeposit(request: DepositRequest): Promise<PaymentProviderResponse> {
-    const path = process.env.GEMPAY_DEPOSIT_PATH || "/pay/wallet/depositRequest";
+    const path = process.env.GEMPAY_DEPOSIT_PATH || "/pay/merchant/deposit";
     const payload = {
       userId: request.userId,
+      reference: request.reference,
+      phone_number: request.phoneNumber,
       amount: request.amount,
       currency: request.currency,
       payment_mode: "MOBILE_MONEY_DEPOSIT",

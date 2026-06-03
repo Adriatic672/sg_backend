@@ -51,12 +51,12 @@ export default class SocialModel extends Model {
 
         this.platforms.set('x', {
             name: 'X (Twitter)',
-            authUrl: 'https://twitter.com/i/oauth2/authorize',
+            authUrl: 'https://x.com/i/oauth2/authorize',
             tokenUrl: 'https://api.twitter.com/2/oauth2/token',
             revokeUrl: 'https://api.twitter.com/2/oauth2/revoke',
             clientKey: process.env.X_CLIENT_ID || process.env.TWITTER_CLIENT_ID || "",
             clientSecret: process.env.X_CLIENT_SECRET || process.env.TWITTER_CLIENT_SECRET || "",
-            redirectUri: process.env.X_REDIRECT_URI || process.env.TWITTER_REDIRECT_URI || "socialgems://app.socialgems.me",
+            redirectUri: process.env.X_REDIRECT_URI || process.env.TWITTER_REDIRECT_URI || process.env.REDIRECT_URI || "https://sg-backend-0cs6.onrender.com/oauth/oauth2redirect",
         });
 
 

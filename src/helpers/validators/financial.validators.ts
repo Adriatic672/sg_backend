@@ -10,6 +10,8 @@ export const kesWithdrawSchema = z.object({
     .string({ required_error: 'msisdn is required' })
     .regex(/^(254|0)(7|1)\d{8}$/, 'invalid M-Pesa number (e.g. 2547XXXXXXXX or 07XXXXXXXX)'),
   pin: z.string().optional(),
+  provider: z.enum(['mpesa', 'gempay', 'relworx']).optional(),
+  payment_provider: z.enum(['mpesa', 'gempay', 'relworx']).optional(),
 });
 
 export const withdrawRequestSchema = z.object({

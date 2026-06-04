@@ -856,6 +856,12 @@ export default class Payments extends Model {
     try {
       console.log("depositRequest", data)
       const { userId, amount, paymentMethod, currency, account_number, converted_amount, redirect_url } = data;
+      const requestedProvider = String(data.provider || data.payment_provider || '').toLowerCase();
+      const useGempay = requestedProvider === 'gempay'
+        ? gempay.enabled
+        : requestedProvider === 'mpesa' || requestedProvider === 'relworx'
+          ? false
+          : gempay.enabled;
       this.logOperation("DEPOSIT_REQUEST", userId, currency, data)
       const baseCurrency = "USD"
 
@@ -923,7 +929,7 @@ export default class Payments extends Model {
 
 
       // MOCK PAYMENT: If we are in dev/local/debug, skip the real payment gateway
-      if (paymentMethod === "MOBILE" && process.env.ENVIRONMENT !== 'production' && !gempay.enabled) {
+      if (paymentMethod === "MOBILE" && process.env.ENVIRONMENT !== 'production' && !useGempay) {
         logger.info(`[Mock Payment] Skipping Relworx call for ${refId} in ${process.env.ENVIRONMENT} mode`);
 
         // 1. Update transaction status to SUCCESS
@@ -939,7 +945,7 @@ export default class Payments extends Model {
       }
 
       if (paymentMethod == "MOBILE") {
-        if (gempay.enabled) {
+        if (useGempay) {
           logger.info(`[Gempay] Initiating mobile deposit: Ref=${refId}, Acc=${account_number}, Amt=${request_amount} ${request_currency}`);
           const requestPayment = await gempay.initiateMobileDeposit({
             reference: refId,
@@ -1357,6 +1363,12 @@ export default class Payments extends Model {
 
   async kesWithdraw(data: any) {
     const { userId, amount, msisdn, pin } = data;
+    const requestedProvider = String(data.provider || data.payment_provider || '').toLowerCase();
+    const useGempay = requestedProvider === 'gempay'
+      ? gempay.enabled
+      : requestedProvider === 'mpesa' || requestedProvider === 'relworx'
+        ? false
+        : gempay.enabled;
 
     // ── 1. Input validation ────────────────────────────────────────────────
     if (!userId || !amount || !msisdn || !pin) {
@@ -1461,7 +1473,7 @@ export default class Payments extends Model {
       logger.warn('kesWithdraw: walletTransfer log failed', { trans_id });
     }
 
-    if (gempay.enabled) {
+    if (useGempay) {
       const gempayResponse = await gempay.initiateMobilePayout({
         reference: request_id,
         userId,

@@ -67,7 +67,7 @@ export default class SocialModel extends Model {
             revokeUrl: '',
             clientKey: process.env.FACEBOOK_CLIENT_ID || process.env.INSTA_PROD_CLIENTKEY || process.env.INSTAGRAM_CLIENT_ID || "",
             clientSecret: process.env.FACEBOOK_CLIENT_SECRET || process.env.INSTA_PROD_SECRETKEY || process.env.INSTAGRAM_CLIENT_SECRET || "",
-            redirectUri: process.env.REDIRECT_URI || "https://app.socialgems.me/oauth2redirect",
+            redirectUri: process.env.FACEBOOK_REDIRECT_URI || process.env.REDIRECT_URI || "https://sg-backend-0cs6.onrender.com/oauth/oauth2redirect",
         });
 
         this.platforms.set('instagram', {

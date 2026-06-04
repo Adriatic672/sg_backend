@@ -1,21 +1,31 @@
--- ── 1. Revision counter on campaign invites ───────────────────────────────────
-ALTER TABLE act_campaign_invites
-  ADD COLUMN IF NOT EXISTS revision_count TINYINT NOT NULL DEFAULT 0 AFTER action_status;
+-- 1. Revision counter on campaign invites.
+-- Compatible with MySQL versions that do not support ADD COLUMN IF NOT EXISTS.
+SET @sql = IF(
+  (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+   WHERE TABLE_SCHEMA = DATABASE()
+     AND TABLE_NAME = 'act_campaign_invites'
+     AND COLUMN_NAME = 'revision_count') = 0,
+  'ALTER TABLE act_campaign_invites ADD COLUMN revision_count TINYINT NOT NULL DEFAULT 0 AFTER action_status',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 
--- ── 2. New admin settings ─────────────────────────────────────────────────────
+-- 2. New admin settings.
 INSERT INTO admin_settings (setting_key, setting_value, setting_type, description) VALUES
 ('max_revision_count',    '3', 'number', 'Maximum number of revisions a brand can request per creator per campaign'),
 ('inaction_timeout_days', '7', 'number', 'Days after creator submits before submission is auto-approved if brand takes no action')
 ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value);
 
--- ── 3. Add cancelled to campaign status enum ──────────────────────────────────
+-- 3. Add cancelled to campaign status enum.
 ALTER TABLE act_campaigns
   MODIFY COLUMN status ENUM(
     'active','expired','deleted','closed','completed',
     'draft','open_to_applications','cancelled'
   ) NOT NULL DEFAULT 'draft';
 
--- ── 4. Notification templates ─────────────────────────────────────────────────
+-- 4. Notification templates.
 INSERT INTO notification_templates (operation, title, body, channel, category) VALUES
 (
   'REVISION_LIMIT_REACHED',

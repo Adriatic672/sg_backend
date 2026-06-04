@@ -757,7 +757,7 @@ export default class Model extends BaseModel {
 
     async GenerateCurrencyWallet(user_id: string, asset: string) {
         try {
-            const currency = ["GEMS", "USD"]
+            const currency = ["GEMS", "USD", "KES"]
             if (!currency.includes(asset)) {
                 return false;
             }

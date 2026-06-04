@@ -1395,6 +1395,8 @@ export default class Payments extends Model {
     if (lockCheck !== false) return lockCheck;
 
     // ── 4. KES wallet + available balance check ────────────────────────────
+    await this.getUserWallet(userId, 'KES');
+
     const wallet: any = await this.callQuerySafe(
       `SELECT wallet_id, balance_available FROM user_wallets
        WHERE user_id = ? AND asset = 'KES' AND status = 'active' LIMIT 1`,

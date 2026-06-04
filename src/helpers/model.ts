@@ -508,7 +508,27 @@ export default class Model extends BaseModel {
     }
 
     async getUserById(userId: string) {
-        return await this.callQuerySafe(`select wallet_pin,user_id, email,user_type,email_verified,level_name, level_id,status,user_type from users u LEFT JOIN levels l on u.level_id=l.id where user_id='${userId}' `);
+        return await this.callQuerySafe(`
+            SELECT
+                (
+                    SELECT wallet_pin
+                    FROM user_wallets
+                    WHERE user_id = u.user_id
+                      AND wallet_pin IS NOT NULL
+                      AND wallet_pin != ''
+                    LIMIT 1
+                ) AS wallet_pin,
+                u.user_id,
+                u.email,
+                u.user_type,
+                u.email_verified,
+                l.level_name,
+                l.level_id,
+                u.status
+            FROM users u
+            LEFT JOIN levels l ON u.level_id = l.id
+            WHERE u.user_id='${userId}'
+        `);
     }
     async getUsersEmail(id: string) {
         const userInfo: any = await this.callQuerySafe(`SELECT email FROM users where user_id ='${id}' `);
@@ -767,12 +787,18 @@ export default class Model extends BaseModel {
                 return userWallet[0]
             }
 
+            const existingPin: any = await this.callQuerySafe(
+                `SELECT wallet_pin FROM user_wallets
+                 WHERE user_id='${user_id}' AND wallet_pin IS NOT NULL AND wallet_pin != ''
+                 LIMIT 1`
+            );
+
             const walletObj = {
                 wallet_id: asset + this.getRandomString(),
                 user_id,
                 asset,
                 status: 'active',
-                wallet_pin: null,
+                wallet_pin: existingPin?.[0]?.wallet_pin || null,
                 balance: 0
             }
 
@@ -889,7 +915,11 @@ export default class Model extends BaseModel {
 
                 if (wallet) {
                     const newBalance = parseFloat(wallet.balance) + amount;
-                    await this.updateData('user_wallets', `wallet_id = '${wallet.wallet_id}'`, { balance: newBalance });
+                    const newAvailable = parseFloat(wallet.balance_available || 0) + amount;
+                    await this.updateData('user_wallets', `wallet_id = '${wallet.wallet_id}'`, {
+                        balance: newBalance,
+                        balance_available: newAvailable
+                    });
                 }
             
             const clientName = await this.getClientName(userId)

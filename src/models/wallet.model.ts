@@ -467,7 +467,13 @@ export default class Payments extends Model {
 
 
   async isAccountLocked(userId: string) {
-    const userResult: any = await this.callQuerySafe(`SELECT wallet_pin FROM user_wallets WHERE user_id='${userId}'`);
+    const userResult: any = await this.callQuerySafe(
+      `SELECT wallet_pin, status, deactivated_until
+       FROM user_wallets
+       WHERE user_id='${userId}'
+       ORDER BY CASE WHEN wallet_pin IS NOT NULL AND wallet_pin != '' THEN 0 ELSE 1 END
+       LIMIT 1`
+    );
     if (userResult.length === 0) {
       return this.makeResponse(404, "User not found");
     }
@@ -499,11 +505,19 @@ export default class Payments extends Model {
         WHERE user_id='${userId}'
       `);
 
-      const userResult: any = await this.callQuerySafe(`SELECT wallet_pin FROM user_wallets WHERE user_id='${userId}'`);
+      const userResult: any = await this.callQuerySafe(
+        `SELECT wallet_pin FROM user_wallets
+         WHERE user_id='${userId}'
+         ORDER BY CASE WHEN wallet_pin IS NOT NULL AND wallet_pin != '' THEN 0 ELSE 1 END
+         LIMIT 1`
+      );
       if (userResult.length === 0) {
         return this.makeResponse(404, "User not found");
       }
       const user = userResult[0];
+      if (!user.wallet_pin) {
+        return this.makeResponse(404, "Transaction PIN not set");
+      }
       const now = new Date();
       let failedAttempts = 0;
       let lockTime: Date | null = null;
@@ -690,7 +704,12 @@ export default class Payments extends Model {
         return this.makeResponse(400, "New PIN and confirm PIN do not match");
       }
 
-      const user: any = await this.callQuerySafe(`SELECT wallet_pin FROM user_wallets WHERE user_id='${userId}'`);
+      const user: any = await this.callQuerySafe(
+        `SELECT wallet_pin FROM user_wallets
+         WHERE user_id='${userId}'
+         ORDER BY CASE WHEN wallet_pin IS NOT NULL AND wallet_pin != '' THEN 0 ELSE 1 END
+         LIMIT 1`
+      );
       if (user.length === 0) {
         return this.makeResponse(404, "User not found");
       }
@@ -742,7 +761,12 @@ export default class Payments extends Model {
       }
 
       // Retrieve the user's current hashed PIN from the database.
-      const user: any = await this.callQuerySafe(`SELECT wallet_pin FROM user_wallets WHERE user_id='${userId}'`);
+      const user: any = await this.callQuerySafe(
+        `SELECT wallet_pin FROM user_wallets
+         WHERE user_id='${userId}'
+         ORDER BY CASE WHEN wallet_pin IS NOT NULL AND wallet_pin != '' THEN 0 ELSE 1 END
+         LIMIT 1`
+      );
       if (user.length === 0) {
         return this.makeResponse(404, "User not found");
       }
@@ -863,7 +887,7 @@ export default class Payments extends Model {
           ? false
           : gempay.enabled;
       this.logOperation("DEPOSIT_REQUEST", userId, currency, data)
-      const baseCurrency = "USD"
+      const baseCurrency = String(currency || '').toUpperCase() === 'KES' ? 'KES' : 'USD'
 
       // Validate input
       if (!userId || !amount || !currency) {
@@ -936,10 +960,14 @@ export default class Payments extends Model {
         await this.updateData('wl_transactions', `trans_id='${refId}'`, { status: 'SUCCESS' });
 
         // 2. Credit the user's wallet directly
-        const currentWallet: any = await this.callQuerySafe(`SELECT balance FROM user_wallets WHERE wallet_id='${userWalletId}'`);
+        const currentWallet: any = await this.callQuerySafe(`SELECT balance, balance_available FROM user_wallets WHERE wallet_id='${userWalletId}'`);
         if (currentWallet.length > 0) {
           const newBalance = parseFloat(currentWallet[0].balance) + parseFloat(amount);
-          await this.updateData('user_wallets', `wallet_id='${userWalletId}'`, { balance: newBalance });
+          const newAvailable = parseFloat(currentWallet[0].balance_available || 0) + parseFloat(amount);
+          await this.updateData('user_wallets', `wallet_id='${userWalletId}'`, {
+            balance: newBalance,
+            balance_available: newAvailable
+          });
         }
         return this.makeResponse(200, "Deposit Successful (Mock)");
       }

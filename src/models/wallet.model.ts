@@ -1002,7 +1002,11 @@ export default class Payments extends Model {
         const requestPayment = await mm.requestPayment(refId, account_number, request_currency, request_amount, "DEPOSIT REQUEST")
         logger.info("requestPayment", requestPayment)
         if (requestPayment.status != 200) {
-          return this.makeResponse(400, "Failed to request payment");
+          return this.makeResponse(
+            requestPayment.status || 400,
+            requestPayment.message || "Failed to request payment",
+            requestPayment.data
+          );
         }
         return requestPayment
       } else if (paymentMethod == "CARD") {

@@ -23,10 +23,30 @@ class RelworxMobileMoney {
 
     });
     console.log(`RelworxMobileMoney initialized with base URL`, {
-      'Authorization': `Bearer ${process.env.RELWORX_API_KEY}`,
+      'Authorization': process.env.RELWORX_API_KEY ? 'Bearer [configured]' : 'Bearer [missing]',
       'Accept': 'application/vnd.relworx.v2',
       'Content-Type': 'application/json',
     })
+  }
+
+  private validateConfig(): emResponse | null {
+    if (!process.env.RELWORX_API_KEY || process.env.RELWORX_API_KEY === 'your_relworx_api_key') {
+      return {
+        status: 500,
+        message: 'Mobile money is not configured: missing RELWORX_API_KEY.',
+        data: null,
+      };
+    }
+
+    if (!process.env.REL_ACCOUNT_NUMBER) {
+      return {
+        status: 500,
+        message: 'Mobile money is not configured: missing REL_ACCOUNT_NUMBER.',
+        data: null,
+      };
+    }
+
+    return null;
   }
 
 
@@ -75,6 +95,11 @@ class RelworxMobileMoney {
     amount: number,
     description?: string
   ): Promise<emResponse> {
+    const configError = this.validateConfig();
+    if (configError) {
+      return configError;
+    }
+
     const thirdpartyAccount = process.env.REL_ACCOUNT_NUMBER || ""
     const payload = {
       account_no: thirdpartyAccount,
@@ -92,7 +117,7 @@ class RelworxMobileMoney {
       new Model().logOperation("RELWORX_COLLECTION_PAYMENT", reference, thirdpartyAccount, "", JSON.stringify(response.data))
       return this.transformResponse(response.data);
     } catch (error) {
-      console.error('requestPayment error:', error);
+      console.error('requestPayment error:', this.safeError(error));
       return this.handleError(error);
     }
   }
@@ -105,6 +130,11 @@ class RelworxMobileMoney {
     amount: number,
     description?: string
   ): Promise<emResponse> {
+    const configError = this.validateConfig();
+    if (configError) {
+      return configError;
+    }
+
     const thirdpartyAccount = process.env.REL_ACCOUNT_NUMBER || ""
     const payload = {
       account_no: thirdpartyAccount,
@@ -127,13 +157,18 @@ class RelworxMobileMoney {
       }
       return this.transformResponse(response.data);
     } catch (error) {
-      console.error('sendPayment error:', error);
+      console.error('sendPayment error:', this.safeError(error));
       return this.handleError(error);
     }
   }
 
 
   public async validateNumber(msisdn: string): Promise<emResponse> {
+    const configError = this.validateConfig();
+    if (configError) {
+      return configError;
+    }
+
     const payload = { msisdn };
 
     try {
@@ -141,13 +176,18 @@ class RelworxMobileMoney {
       console.log('validateNumber success:', response.data);
       return this.transformResponse(response.data);
     } catch (error) {
-      console.error('validateNumber error:', error);
+      console.error('validateNumber error:', this.safeError(error));
       return this.handleError(error);
     }
   }
 
 
   public async getWalletBalance(accountNo: string, currency: string): Promise<emResponse> {
+    const configError = this.validateConfig();
+    if (configError) {
+      return configError;
+    }
+
     const payload = { account_no: accountNo, currency };
 
     try {
@@ -155,13 +195,18 @@ class RelworxMobileMoney {
       console.log('getWalletBalance success:', response.data);
       return this.transformResponse(response.data);
     } catch (error) {
-      console.error('getWalletBalance error:', error);
+      console.error('getWalletBalance error:', this.safeError(error));
       return this.handleError(error);
     }
   }
 
 
   public async checkRequestStatus(accountNo: string, reference: string): Promise<emResponse> {
+    const configError = this.validateConfig();
+    if (configError) {
+      return configError;
+    }
+
     const payload = { account_no: accountNo, reference };
 
     try {
@@ -169,9 +214,22 @@ class RelworxMobileMoney {
       console.log('checkRequestStatus success:', response.data);
       return this.transformResponse(response.data);
     } catch (error) {
-      console.error('checkRequestStatus error:', error);
+      console.error('checkRequestStatus error:', this.safeError(error));
       return this.handleError(error);
     }
+  }
+
+  private safeError(error: unknown) {
+    if (axios.isAxiosError(error)) {
+      return {
+        status: error.response?.status,
+        message: (error.response?.data as any)?.message || error.message,
+        error_code: (error.response?.data as any)?.error_code,
+        request_id: error.response?.headers?.['x-request-id'],
+      };
+    }
+
+    return error instanceof Error ? error.message : error;
   }
 }
 

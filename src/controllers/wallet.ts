@@ -261,7 +261,8 @@ async function accountStatement(req: Request, res: Response) {
 async function depositRequest(req: Request, res: Response) {
   try {
     const result = await pay.depositRequest(req.body);
-    res.status(result.status || 200).json(result);
+    const status = result.status === 401 ? 400 : result.status || 200;
+    res.status(status).json({ ...result, status });
   } catch (error) {
     res.status(500).json({ message: 'Error processing deposit request', error });
   }

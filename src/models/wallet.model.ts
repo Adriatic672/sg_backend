@@ -1007,7 +1007,7 @@ export default class Payments extends Model {
         if (requestPayment.status != 200) {
           await this.updateData('wl_transactions', `trans_id='${refId}'`, { status: 'FAILED' });
           return this.makeResponse(
-            requestPayment.status || 400,
+            requestPayment.status === 401 ? 400 : requestPayment.status || 400,
             requestPayment.message || "Failed to request payment",
             requestPayment.data
           );

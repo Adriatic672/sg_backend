@@ -12,10 +12,11 @@ class RelworxMobileMoney {
   private axiosInstance: AxiosInstance;
 
   constructor() {
+    const apiKey = this.cleanApiKey(process.env.RELWORX_API_KEY);
     this.axiosInstance = axios.create({
-      baseURL: process.env.RELWORX_URL || 'https://payments.relworx.com/api/mobile-money',
+      baseURL: this.cleanEnv(process.env.RELWORX_URL) || 'https://payments.relworx.com/api/mobile-money',
       headers: {
-        'Authorization': `Bearer ${process.env.RELWORX_API_KEY}`,
+        'Authorization': `Bearer ${apiKey}`,
         'Accept': 'application/vnd.relworx.v2',
         'Content-Type': 'application/json',
       },
@@ -23,14 +24,26 @@ class RelworxMobileMoney {
 
     });
     console.log(`RelworxMobileMoney initialized with base URL`, {
-      'Authorization': process.env.RELWORX_API_KEY ? 'Bearer [configured]' : 'Bearer [missing]',
+      'Authorization': apiKey ? `Bearer [configured:${apiKey.length}:...${apiKey.slice(-4)}]` : 'Bearer [missing]',
       'Accept': 'application/vnd.relworx.v2',
       'Content-Type': 'application/json',
+      'Account': this.cleanEnv(process.env.REL_ACCOUNT_NUMBER) || '[missing]',
     })
   }
 
+  private cleanEnv(value: string | undefined): string {
+    return String(value || '').trim().replace(/^['"]|['"]$/g, '');
+  }
+
+  private cleanApiKey(value: string | undefined): string {
+    return this.cleanEnv(value).replace(/^Bearer\s+/i, '').trim();
+  }
+
   private validateConfig(): emResponse | null {
-    if (!process.env.RELWORX_API_KEY || process.env.RELWORX_API_KEY === 'your_relworx_api_key') {
+    const apiKey = this.cleanApiKey(process.env.RELWORX_API_KEY);
+    const accountNumber = this.cleanEnv(process.env.REL_ACCOUNT_NUMBER);
+
+    if (!apiKey || apiKey === 'your_relworx_api_key') {
       return {
         status: 500,
         message: 'Mobile money is not configured: missing RELWORX_API_KEY.',
@@ -38,7 +51,7 @@ class RelworxMobileMoney {
       };
     }
 
-    if (!process.env.REL_ACCOUNT_NUMBER) {
+    if (!accountNumber) {
       return {
         status: 500,
         message: 'Mobile money is not configured: missing REL_ACCOUNT_NUMBER.',
@@ -71,7 +84,11 @@ class RelworxMobileMoney {
       const axiosError = error as AxiosError;
       if (axiosError.response && axiosError.response.data) {
         // Transform the response from the API (which may contain a "success" field)
-        return this.transformResponse(axiosError.response.data);
+        const response = this.transformResponse(axiosError.response.data);
+        return {
+          ...response,
+          status: axiosError.response.status || response.status,
+        };
       } else {
         return {
           status: 400,
@@ -100,7 +117,7 @@ class RelworxMobileMoney {
       return configError;
     }
 
-    const thirdpartyAccount = process.env.REL_ACCOUNT_NUMBER || ""
+    const thirdpartyAccount = this.cleanEnv(process.env.REL_ACCOUNT_NUMBER)
     const payload = {
       account_no: thirdpartyAccount,
       reference,
@@ -135,7 +152,7 @@ class RelworxMobileMoney {
       return configError;
     }
 
-    const thirdpartyAccount = process.env.REL_ACCOUNT_NUMBER || ""
+    const thirdpartyAccount = this.cleanEnv(process.env.REL_ACCOUNT_NUMBER)
     const payload = {
       account_no: thirdpartyAccount,
       reference,

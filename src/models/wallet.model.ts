@@ -1005,6 +1005,7 @@ export default class Payments extends Model {
         const requestPayment = await relworx().requestPayment(refId, account_number, request_currency, request_amount, "DEPOSIT REQUEST")
         logger.info("requestPayment", requestPayment)
         if (requestPayment.status != 200) {
+          await this.updateData('wl_transactions', `trans_id='${refId}'`, { status: 'FAILED' });
           return this.makeResponse(
             requestPayment.status || 400,
             requestPayment.message || "Failed to request payment",

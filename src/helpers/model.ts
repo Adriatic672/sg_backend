@@ -655,7 +655,10 @@ export default class Model extends BaseModel {
     }
 
     async getBusinessProfile(business_id: string) {
-        const businesses: any = await this.callQuerySafe(`SELECT * FROM business_profile WHERE owner_id='${business_id}'`);
+        const businesses: any = await this.callQuerySafe(
+            `SELECT * FROM business_profile WHERE owner_id = ? OR business_id = ? ORDER BY created_on DESC LIMIT 1`,
+            [business_id, business_id]
+        );
         return businesses.length > 0 ? businesses[0] : null;
     }
 

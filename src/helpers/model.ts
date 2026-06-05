@@ -523,7 +523,7 @@ export default class Model extends BaseModel {
                 u.user_type,
                 u.email_verified,
                 l.level_name,
-                l.level_id,
+                l.id AS level_id,
                 u.status
             FROM users u
             LEFT JOIN levels l ON u.level_id = l.id
@@ -712,16 +712,17 @@ export default class Model extends BaseModel {
         console.log(userId);
         if (userInfo.length == 0) return [];
 
+        const profile: any = await this.callQuerySafe(`SELECT * FROM users_profile WHERE user_id='${userId}'`);
+        const profileRow = profile.length > 0 ? profile[0] : {};
+
         let business_profile: any = null;
         if (userInfo[0].user_type == 'brand') {
-            business_profile = await this.getBusinessProfile(userId);
-            if (business_profile) {
-                userInfo[0].business_profile = business_profile;
+            try {
+                business_profile = await this.getBusinessProfile(userId);
+            } catch (error) {
+                logger.error("Error fetching business profile:", error);
             }
         }
-
-        const profile: any = await this.callQuerySafe(`SELECT * FROM users_profile WHERE user_id='${userId}'`);
-        if (profile.length == 0) return [];
 
 
         let industry_ids: any = []
@@ -732,7 +733,7 @@ export default class Model extends BaseModel {
 
         }
 
-        profile[0].industry_ids = industry_ids
+        profileRow.industry_ids = industry_ids
         const user = userInfo[0]
         const wallet_pin = user.wallet_pin || ""
 
@@ -751,16 +752,26 @@ export default class Model extends BaseModel {
         } catch (error) {}
         user.average_rating = averageRating;
 
-        const wallet = await this.getUserWallet(userId)
+        let wallet: any = null;
+        try {
+            wallet = await this.getUserWallet(userId)
+        } catch (error) {
+            logger.error("Error fetching user wallet:", error);
+        }
+
         if (showBalance) {
             const combinedResult = {
                 ...user,
-                ...(profile as any[])[0],
+                ...profileRow,
+                ...(business_profile ? { business_profile } : {}),
                 wallet
             };
             return combinedResult;
         } else {
-            return (profile as any[])[0]
+            return {
+                ...profileRow,
+                ...(business_profile ? { business_profile } : {})
+            }
         }
 
 

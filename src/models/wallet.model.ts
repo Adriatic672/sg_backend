@@ -886,6 +886,8 @@ export default class Payments extends Model {
         : requestedProvider === 'mpesa' || requestedProvider === 'relworx'
           ? false
           : gempay.enabled;
+      const allowMockMobileMoney =
+        String(process.env.ENABLE_MOCK_MOBILE_MONEY || process.env.MOCK_MOBILE_MONEY || '').toLowerCase() === 'true';
       this.logOperation("DEPOSIT_REQUEST", userId, currency, data)
       const baseCurrency = String(currency || '').toUpperCase() === 'KES' ? 'KES' : 'USD'
 
@@ -952,9 +954,10 @@ export default class Payments extends Model {
       await this.insertData('wl_transactions', newTransaction);
 
 
-      // MOCK PAYMENT: If we are in dev/local/debug, skip the real payment gateway
-      if (paymentMethod === "MOBILE" && process.env.ENVIRONMENT !== 'production' && !useGempay) {
-        logger.info(`[Mock Payment] Skipping Relworx call for ${refId} in ${process.env.ENVIRONMENT} mode`);
+      // MOCK PAYMENT: only enabled explicitly. Never auto-credit just because
+      // ENVIRONMENT is not production.
+      if (paymentMethod === "MOBILE" && allowMockMobileMoney && !useGempay) {
+        logger.info(`[Mock Payment] Skipping Relworx call for ${refId} because mock mobile money is enabled`);
 
         // 1. Update transaction status to SUCCESS
         await this.updateData('wl_transactions', `trans_id='${refId}'`, { status: 'SUCCESS' });

@@ -83,8 +83,66 @@ class Admin extends Model {
       return this.makeResponse(500, "Error adding rate");
     }
   }
+  private businessRegistrationSelect(whereClause = '') {
+    return `
+      SELECT
+        p.business_id,
+        p.name,
+        p.name AS business_name,
+        p.address,
+        p.phone,
+        p.website,
+        p.email,
+        p.email AS business_email,
+        p.description,
+        p.owner_id,
+        p.created_by_id,
+        p.created_by_type,
+        p.approved_by,
+        p.is_registered,
+        p.registration_number,
+        p.country,
+        p.verification_status,
+        p.created_on,
+        p.created_on AS created_at,
+        p.approved_at,
+        p.phone_verified,
+        p.rejection_reason,
+        p.created_by_user_id,
+        p.logo,
+        owner.email AS owner_email,
+        owner.user_type AS owner_user_type,
+        owner.status AS owner_status,
+        owner_profile.first_name AS owner_first_name,
+        owner_profile.last_name AS owner_last_name,
+        owner_profile.username AS owner_username,
+        staff.primary_staff_email,
+        staff.staff_emails,
+        COALESCE(owner.email, staff.primary_staff_email, p.email) AS login_email,
+        countries.name AS country_name,
+        countries.iso2,
+        countries.iso3
+      FROM business_profile p
+      LEFT JOIN users owner ON owner.user_id = p.owner_id OR owner.user_id = p.business_id
+      LEFT JOIN users_profile owner_profile ON owner_profile.user_id = owner.user_id
+      LEFT JOIN (
+        SELECT
+          business_id,
+          MIN(email) AS primary_staff_email,
+          GROUP_CONCAT(DISTINCT email ORDER BY email SEPARATOR ', ') AS staff_emails
+        FROM business_staff
+        GROUP BY business_id
+      ) staff ON staff.business_id = p.business_id
+      LEFT JOIN countries ON p.country = countries.iso2 OR p.country = countries.iso3 OR p.country = countries.phone_code
+      ${whereClause}
+      ORDER BY p.created_on DESC
+    `;
+  }
+
   async getVerifiedBusinessRegistrations() {
-    const businesses = await this.callQuerySafe(`SELECT * FROM business_profile p left join countries u on p.country = u.phone_code WHERE verification_status = 'approved'`);
+    const businesses = await this.callQuerySafe(
+      this.businessRegistrationSelect(`WHERE p.verification_status IN ('approved', 'verified')`)
+    );
     return this.makeResponse(200, "Business registrations retrieved successfully", businesses);
   }
 
@@ -93,13 +151,14 @@ class Admin extends Model {
     return businesses.length > 0 ? businesses[0] : null;
   }
   async getPendingBusinessRegistrations() {
-    const businesses = await this.callQuerySafe(`SELECT * FROM business_profile p left join countries u on p.country = u.phone_code WHERE verification_status = 'pending' or verification_status = 'rejected'`);
+    const businesses = await this.callQuerySafe(
+      this.businessRegistrationSelect(`WHERE COALESCE(p.verification_status, 'pending') NOT IN ('approved', 'verified')`)
+    );
     return this.makeResponse(200, "Business registrations retrieved successfully", businesses);
   }
 
   async getBusinessRegistrations() {
-    const businesses = await this.callQuerySafe(`SELECT * FROM business_profile p left join countries u on p.country = u.phone_code;
-`);
+    const businesses = await this.callQuerySafe(this.businessRegistrationSelect());
     return this.makeResponse(200, "Business registrations retrieved successfully", businesses);
   }
   async approveBusiness(data: any) {

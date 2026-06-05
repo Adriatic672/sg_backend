@@ -3,7 +3,7 @@ import { getUserTier, tierAtLeast, type SubscriptionTier } from "../helpers/subs
 import { logger } from "../utils/logger";
 import ChatModel from "./chat.model";
 
-const FREE_POST_LIMIT = 2;
+const FREE_POST_LIMIT = 11111;
 type JobAccessTier = SubscriptionTier;
 
 export default class JobBoard extends Model {

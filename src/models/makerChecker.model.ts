@@ -93,13 +93,31 @@ class MakerCheckerModel extends Model {
     const requests = await this.callQuerySafe(`
       SELECT 
         r.*,
-        GROUP_CONCAT(
-          CONCAT(a.approver_user_id, ':', a.action, ':', a.approved_at, ':', COALESCE(a.notes, ''))
-          SEPARATOR '|'
-        ) as approvers
+        target.email AS target_email,
+        target.user_type AS target_user_type,
+        target_profile.first_name AS target_first_name,
+        target_profile.last_name AS target_last_name,
+        target_profile.username AS target_username,
+        target_business.name AS target_business_name,
+        maker.email AS requested_by_email,
+        maker.first_name AS requested_by_first_name,
+        maker.last_name AS requested_by_last_name,
+        approvals.approvers
       FROM maker_checker_requests r
-      LEFT JOIN maker_checker_approvals a ON r.request_id = a.request_id
-      GROUP BY r.request_id
+      LEFT JOIN users target ON target.user_id = r.primary_key_value
+      LEFT JOIN users_profile target_profile ON target_profile.user_id = r.primary_key_value
+      LEFT JOIN business_profile target_business ON target_business.owner_id = r.primary_key_value
+      LEFT JOIN admin_users maker ON maker.user_id = r.maker_user_id
+      LEFT JOIN (
+        SELECT
+          request_id,
+          GROUP_CONCAT(
+            CONCAT(approver_user_id, ':', action, ':', approved_at, ':', COALESCE(notes, ''))
+            SEPARATOR '|'
+          ) AS approvers
+        FROM maker_checker_approvals
+        GROUP BY request_id
+      ) approvals ON approvals.request_id = r.request_id
       ORDER BY r.date_sent DESC
     `);
     
@@ -122,7 +140,15 @@ class MakerCheckerModel extends Model {
       return {
         ...request,
         approvers: approvers,
-        request_data: request.request_data
+        request_data: request.request_data,
+        target_id: request.primary_key_value,
+        target_name: request.target_business_name
+          || [request.target_first_name, request.target_last_name].filter(Boolean).join(' ')
+          || request.target_username
+          || null,
+        requested_by: [request.requested_by_first_name, request.requested_by_last_name].filter(Boolean).join(' ')
+          || request.requested_by_email
+          || request.maker_user_id
       };
       });
 

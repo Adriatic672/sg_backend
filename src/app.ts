@@ -1,9 +1,9 @@
+import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import bodyParser from 'body-parser';
 import cors from 'cors';
-import dotenv from 'dotenv';
 import expressFileUpload from 'express-fileupload';
 import http from 'http';
 import rateLimit from 'express-rate-limit'; // Import rate limiting middleware
@@ -78,8 +78,6 @@ import initializeWebSocket from './controllers/ws';
 import Test from './tests/index';
 new Test();
 new CronService()
-
-dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3005;

@@ -9,8 +9,11 @@ import crypto from 'crypto';
 import { logger } from '../utils/logger';
 import cloudWatchLogger from '../helpers/cloudwatch.helper';
 
-const mm = new RelworxMobileMoney()
 const gempay = new GempayProvider()
+
+function relworx() {
+  return new RelworxMobileMoney();
+}
 
 let _stripe: Stripe | null = null;
 function getStripe(): Stripe {
@@ -108,7 +111,7 @@ export default class Payments extends Model {
   async validateUserAccount(data: any) {
     const { account_number, pay_method, currency } = data;
     if (pay_method == "MOBILE_MONEY") {
-      const accountInfo = await mm.validateNumber(account_number)
+      const accountInfo = await relworx().validateNumber(account_number)
       return accountInfo
     }
     return this.makeResponse(400, `Invalid payment method`);
@@ -999,7 +1002,7 @@ export default class Payments extends Model {
         }
 
         logger.info(`[Relworx] Initiating Payment: Ref=${refId}, Acc=${account_number}, Amt=${request_amount} ${request_currency}`);
-        const requestPayment = await mm.requestPayment(refId, account_number, request_currency, request_amount, "DEPOSIT REQUEST")
+        const requestPayment = await relworx().requestPayment(refId, account_number, request_currency, request_amount, "DEPOSIT REQUEST")
         logger.info("requestPayment", requestPayment)
         if (requestPayment.status != 200) {
           return this.makeResponse(
@@ -1362,7 +1365,7 @@ export default class Payments extends Model {
 
 
       if (paymentMethod.toUpperCase() == "MOBILE") {
-        thirdpartyPayResponse = await mm.sendPayment(reference, account_number, payout_currency, amount, narration);
+        thirdpartyPayResponse = await relworx().sendPayment(reference, account_number, payout_currency, amount, narration);
         logger.info(`thirdpartyPay:`, thirdpartyPayResponse);
         statusCode = thirdpartyPayResponse.status
         message = thirdpartyPayResponse.message
@@ -1448,7 +1451,7 @@ export default class Payments extends Model {
     }
 
     // ── 5. Validate M-Pesa number with Relworx ─────────────────────────────
-    const validation = await mm.validateNumber(phone);
+    const validation = await relworx().validateNumber(phone);
     if (validation.status !== 200) {
       return this.makeResponse(400, `M-Pesa number validation failed: ${validation.message}`);
     }
@@ -1572,7 +1575,7 @@ export default class Payments extends Model {
     // ── 7. Trigger Relworx B2C payout ─────────────────────────────────────
     let relworxResponse: any;
     try {
-      relworxResponse = await mm.sendPayment(request_id, phone, 'KES', amount, 'SocialGems Earnings');
+      relworxResponse = await relworx().sendPayment(request_id, phone, 'KES', amount, 'SocialGems Earnings');
       logger.info('kesWithdraw Relworx response', { request_id, response: relworxResponse });
     } catch (apiErr: any) {
       logger.error('kesWithdraw Relworx API exception', { request_id, apiErr });

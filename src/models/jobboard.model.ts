@@ -3,7 +3,7 @@ import { getUserTier, tierAtLeast, type SubscriptionTier } from "../helpers/subs
 import { logger } from "../utils/logger";
 import ChatModel from "./chat.model";
 
-const FREE_POST_LIMIT = 11111;
+const FREE_POST_LIMIT = 1222222;
 type JobAccessTier = SubscriptionTier;
 
 export default class JobBoard extends Model {
@@ -43,6 +43,29 @@ export default class JobBoard extends Model {
     };
   }
 
+  private normaliseJobStatus(status?: string | null): "draft" | "active" | "closed" | "deleted" {
+    const value = (status || "active").toString().trim().toLowerCase();
+    if (["draft", "active", "closed", "deleted"].includes(value)) {
+      return value as "draft" | "active" | "closed" | "deleted";
+    }
+    return "active";
+  }
+
+  private defaultDraftDeadline(): string {
+    const deadline = new Date();
+    deadline.setDate(deadline.getDate() + 30);
+    return deadline.toISOString().slice(0, 10);
+  }
+
+  private validatePublishableJob(data: any): string | null {
+    if (!data.title || !data.title.toString().trim()) return "title is required";
+    if (!data.description || data.description.toString().trim().length < 20) {
+      return "description must be at least 20 characters";
+    }
+    if (!data.deadline) return "deadline is required";
+    return null;
+  }
+
   // ─── Quota ────────────────────────────────────────────────────────────────
 
   async checkPostQuota(brandId: string, compType?: string): Promise<{ canPost: boolean; requiresUpgrade?: boolean }> {
@@ -73,9 +96,13 @@ export default class JobBoard extends Model {
   async createJob(data: any) {
     const { userId, title, description, comp_amount, comp_currency, comp_type,
       min_followers, niche, deadline, campaign_id, guidelines_attachment, guidelines_text } = data;
+    const status = this.normaliseJobStatus(data.status);
 
-    if (!title || !description || !deadline) {
-      return this.makeResponse(400, "title, description and deadline are required");
+    if (status === "active") {
+      const validationError = this.validatePublishableJob({ title, description, deadline });
+      if (validationError) {
+        return this.makeResponse(400, validationError);
+      }
     }
 
     // If campaign_id is provided, verify it belongs to the brand
@@ -89,15 +116,17 @@ export default class JobBoard extends Model {
       }
     }
 
-    const quota = await this.checkPostQuota(userId, comp_type);
-    if (!quota.canPost) {
-      // Generate upgrade URL for brand to upgrade their account
-      const domain = process.env.DOMAIN || process.env.PROD_DOMAIN || 'https://socialgems.me';
-      const upgradeUrl = `${domain}/upgrade?brand=${userId}`;
-      return this.makeResponse(402, `Free product/service job post limit reached. Upgrade after ${FREE_POST_LIMIT} free posts.`, {
-        requiresUpgrade: true,
-        checkoutUrl: upgradeUrl,
-      });
+    if (status === "active") {
+      const quota = await this.checkPostQuota(userId, comp_type);
+      if (!quota.canPost) {
+        // Generate upgrade URL for brand to upgrade their account
+        const domain = process.env.DOMAIN || process.env.PROD_DOMAIN || 'https://socialgems.me';
+        const upgradeUrl = `${domain}/upgrade?brand=${userId}`;
+        return this.makeResponse(402, `Free product/service job post limit reached. Upgrade after ${FREE_POST_LIMIT} free posts.`, {
+          requiresUpgrade: true,
+          checkoutUrl: upgradeUrl,
+        });
+      }
     }
 
     const job_id = this.getRandomString();
@@ -105,21 +134,26 @@ export default class JobBoard extends Model {
     await this.insertData("jb_job_posts", {
       job_id,
       brand_id: userId,
-      title,
-      description,
+      title: title?.toString().trim() || "Untitled job draft",
+      description: description?.toString().trim() || "",
       comp_amount: comp_amount ?? 0,
       comp_currency: comp_currency ?? "KES",
       comp_type: comp_type ?? "cash",
       access_tier,
       min_followers: min_followers ?? 0,
       niche: niche ?? null,
-      deadline,
+      deadline: deadline || this.defaultDraftDeadline(),
       campaign_id: campaign_id ?? null,
       guidelines_attachment: guidelines_attachment ?? null,
       guidelines_text: guidelines_text ?? null,
+      status,
     });
 
-    return this.makeResponse(200, "Job posted successfully", { job_id, campaign_id, access_tier });
+    return this.makeResponse(
+      200,
+      status === "draft" ? "Job draft saved successfully" : "Job posted successfully",
+      { job_id, campaign_id, access_tier, status }
+    );
   }
 
   async closeJob(data: any) {
@@ -168,13 +202,13 @@ export default class JobBoard extends Model {
 
   async updateJob(data: any) {
     const { userId, job_id, title, description, comp_amount, comp_currency, comp_type,
-      min_followers, niche, deadline, guidelines_text, guidelines_attachment, campaign_id } = data;
+      min_followers, niche, deadline, guidelines_text, guidelines_attachment, campaign_id, status } = data;
 
     if (!job_id) return this.makeResponse(400, "job_id is required");
 
     // Check if job exists and belongs to the brand
     const job: any[] = await this.callQuerySafe(
-      `SELECT job_id, brand_id, status, comp_type, comp_amount FROM jb_job_posts WHERE job_id = ? LIMIT 1`,
+      `SELECT job_id, brand_id, status, title, description, deadline, comp_type, comp_amount FROM jb_job_posts WHERE job_id = ? LIMIT 1`,
       [job_id]
     );
     if (job.length === 0) return this.makeResponse(404, "Job not found");
@@ -198,6 +232,40 @@ export default class JobBoard extends Model {
     if (guidelines_text !== undefined) updateFields.guidelines_text = guidelines_text;
     if (guidelines_attachment !== undefined) updateFields.guidelines_attachment = guidelines_attachment;
     if (campaign_id !== undefined) updateFields.campaign_id = campaign_id;
+    if (status !== undefined) {
+      const nextStatus = this.normaliseJobStatus(status);
+      if (nextStatus === "closed" || nextStatus === "deleted") {
+        return this.makeResponse(400, "Use the close or delete action for this job status");
+      }
+      updateFields.status = nextStatus;
+    }
+
+    if (updateFields.status === "active") {
+      const publishData = {
+        title: title !== undefined ? title : job[0].title,
+        description: description !== undefined ? description : job[0].description,
+        deadline: deadline !== undefined ? deadline : job[0].deadline,
+      };
+      const validationError = this.validatePublishableJob(publishData);
+      if (validationError) {
+        return this.makeResponse(400, validationError);
+      }
+
+      if (job[0].status === "draft") {
+        const quota = await this.checkPostQuota(
+          userId,
+          comp_type !== undefined ? comp_type : job[0].comp_type
+        );
+        if (!quota.canPost) {
+          const domain = process.env.DOMAIN || process.env.PROD_DOMAIN || 'https://socialgems.me';
+          const upgradeUrl = `${domain}/upgrade?brand=${userId}`;
+          return this.makeResponse(402, `Free product/service job post limit reached. Upgrade after ${FREE_POST_LIMIT} free posts.`, {
+            requiresUpgrade: true,
+            checkoutUrl: upgradeUrl,
+          });
+        }
+      }
+    }
 
     if (comp_amount !== undefined || comp_type !== undefined) {
       updateFields.access_tier = this.deriveJobAccessTier(
@@ -977,6 +1045,10 @@ export default class JobBoard extends Model {
     }
 
     const row = rows[0];
+    if (row.status === "draft" && row.brand_id !== userId) {
+      return this.makeResponse(404, "Job not found");
+    }
+
     const job = {
       ...this.formatJobRow(row),
       my_interest_status: row.my_interest_status || 'none',

@@ -2,13 +2,19 @@ import Model from "../helpers/model";
 import { getUserTier, tierAtLeast, type SubscriptionTier } from "../helpers/subscriptionTier";
 import { logger } from "../utils/logger";
 import ChatModel from "./chat.model";
+import AdminSettings from "./admin.settings.model";
 
 const FREE_POST_LIMIT = 1222222;
 type JobAccessTier = SubscriptionTier;
+const DEFAULT_CREATOR_PLUS_MAX_KES = 20000;
+const DEFAULT_CREATOR_PRO_MIN_KES = 25000;
 
 export default class JobBoard extends Model {
+  private settings: AdminSettings;
+
   constructor() {
     super();
+    this.settings = new AdminSettings();
   }
 
   private normaliseCompType(compType?: string | null): string {
@@ -25,7 +31,29 @@ export default class JobBoard extends Model {
 
     if (type === "affiliate") return "plus";
     if (this.isFreeProductOrService(type)) return "free";
-    if (amount >= 25000) return "pro";
+    if (amount >= DEFAULT_CREATOR_PRO_MIN_KES) return "pro";
+    if (amount > 0) return "plus";
+    return "free";
+  }
+
+  private async deriveConfiguredJobAccessTier(compType?: string | null, compAmount?: any): Promise<JobAccessTier> {
+    const type = this.normaliseCompType(compType);
+    const amount = Number(compAmount || 0);
+
+    if (type === "affiliate") return "plus";
+    if (this.isFreeProductOrService(type)) return "free";
+
+    const proMinKes = await this.settings.getSettingNumber(
+      "creator_pro_min_kes",
+      DEFAULT_CREATOR_PRO_MIN_KES
+    );
+    const plusMaxKes = await this.settings.getSettingNumber(
+      "creator_plus_max_kes",
+      DEFAULT_CREATOR_PLUS_MAX_KES
+    );
+
+    if (amount >= proMinKes) return "pro";
+    if (amount > 0 && amount <= plusMaxKes) return "plus";
     if (amount > 0) return "plus";
     return "free";
   }
@@ -130,7 +158,7 @@ export default class JobBoard extends Model {
     }
 
     const job_id = this.getRandomString();
-    const access_tier = this.deriveJobAccessTier(comp_type, comp_amount);
+    const access_tier = await this.deriveConfiguredJobAccessTier(comp_type, comp_amount);
     await this.insertData("jb_job_posts", {
       job_id,
       brand_id: userId,
@@ -268,7 +296,7 @@ export default class JobBoard extends Model {
     }
 
     if (comp_amount !== undefined || comp_type !== undefined) {
-      updateFields.access_tier = this.deriveJobAccessTier(
+      updateFields.access_tier = await this.deriveConfiguredJobAccessTier(
         comp_type !== undefined ? comp_type : job[0].comp_type,
         comp_amount !== undefined ? comp_amount : job[0].comp_amount
       );

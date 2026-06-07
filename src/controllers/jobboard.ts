@@ -238,7 +238,10 @@ async function getJobApplicants(req: Request, res: Response) {
 
 async function listJobs(req: Request, res: Response) {
   try {
-    const result = await jobBoard.getJobs({ ...req.body, ...req.query });
+    const result = await jobBoard.getJobs({
+      ...req.query,
+      userId: req.body.userId,
+    });
     res.status(200).json(result);
   } catch (error) {
     res.status(500).json({ message: 'Error listing jobs', error });

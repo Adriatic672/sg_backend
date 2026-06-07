@@ -10,19 +10,57 @@ import Stellar from "../helpers/Stellar";
 import * as StellarSdk from 'stellar-sdk';
 import { UserStellarService } from '../helpers/UserStellarService';
 import EscrowModel from './escrow.model';
+import AdminSettings from './admin.settings.model';
 
 const applicationStatus = ['pending', 'accepted', 'rejected'];
+type OpportunityAccessTier = 'free' | 'plus' | 'pro';
+const DEFAULT_CREATOR_PLUS_MAX_KES = 20000;
+const DEFAULT_CREATOR_PRO_MIN_KES = 25000;
 
 export default class Campaigns extends Model {
   private groupsModel: Groups;
   private userStellarService: UserStellarService;
   private stellar: Stellar;
+  private settings: AdminSettings;
 
   constructor() {
     super();
     this.groupsModel = new Groups();
     this.userStellarService = new UserStellarService();
     this.stellar = new Stellar();
+    this.settings = new AdminSettings();
+  }
+
+  private async deriveCampaignAccessTier(
+    earningType?: string | null,
+    budget?: any,
+    numberOfInfluencers?: any,
+  ): Promise<OpportunityAccessTier> {
+    const type = (earningType || 'paid').toString().trim().toLowerCase();
+    if (type === 'affiliate') return 'plus';
+    if (type === 'barter' || type === 'product' || type === 'service') {
+      return 'free';
+    }
+
+    const totalBudget = Number(budget || 0);
+    const influencerCount = Math.max(1, Number(numberOfInfluencers || 1));
+    const estimatedCreatorPayout = totalBudget / influencerCount;
+
+    const proMinKes = await this.settings.getSettingNumber(
+      'creator_pro_min_kes',
+      DEFAULT_CREATOR_PRO_MIN_KES
+    );
+    const plusMaxKes = await this.settings.getSettingNumber(
+      'creator_plus_max_kes',
+      DEFAULT_CREATOR_PLUS_MAX_KES
+    );
+
+    if (estimatedCreatorPayout >= proMinKes) return 'pro';
+    if (estimatedCreatorPayout > 0 && estimatedCreatorPayout <= plusMaxKes) {
+      return 'plus';
+    }
+    if (estimatedCreatorPayout > 0) return 'plus';
+    return 'free';
   }
 
 
@@ -907,23 +945,14 @@ WHERE i.user_id = '${userId}' AND i.invite_status = '${status}' AND i.applicatio
   }
 
   async exploreCampaigns(userId: string, earningType?: string) {
-    const userTier = await getUserTier(userId);
     const earningFilter = earningType
       ? `AND c.earning_type = '${earningType}'`
       : '';
 
-    // Tier access filter: free users cannot see 'plus' or 'pro' campaigns;
-    // plus users cannot see 'pro' campaigns.
-    let tierFilter = `AND c.access_tier = 'free'`;
-    if (userTier === 'pro') {
-      tierFilter = ``;
-    } else if (userTier === 'plus') {
-      tierFilter = `AND c.access_tier IN ('free', 'plus')`;
-    }
-
     // Early access: paid users see campaigns within their early_access_hours window
     // before the campaign becomes available to free users.
     let earlyAccessFilter = ``;
+    const userTier = await getUserTier(userId);
     if (userTier === 'pro' || userTier === 'plus') {
       earlyAccessFilter = `OR (c.early_access_hours > 0 AND c.status = 'active' AND DATE_ADD(c.created_on, INTERVAL c.early_access_hours HOUR) > NOW())`;
     }
@@ -944,7 +973,6 @@ WHERE i.user_id = '${userId}' AND i.invite_status = '${status}' AND i.applicatio
       LEFT JOIN act_campaign_invites i ON c.campaign_id = i.campaign_id AND i.user_id = '${userId}'
       WHERE c.status IN ('active', 'open_to_applications')
       ${earningFilter}
-      ${tierFilter}
       ${earlyAccessFilter}
       ORDER BY c.created_on DESC
     `);
@@ -2254,6 +2282,11 @@ WHERE campaign_id = '${campaign_id}'`);
         budget,
         number_of_influencers,
         earning_type: earning_type || 'paid',
+        access_tier: await this.deriveCampaignAccessTier(
+          earning_type,
+          budget,
+          number_of_influencers
+        ),
         status: "draft",
         business_id: finalBusinessId,
         created_by_user_id: created_by_user_id,
@@ -2443,7 +2476,12 @@ WHERE campaign_id = '${campaign_id}'`);
         end_date,
         image_urls: final_campaign_image,
         budget,
-        number_of_influencers
+        number_of_influencers,
+        access_tier: await this.deriveCampaignAccessTier(
+          campaignData.earning_type,
+          budget,
+          number_of_influencers
+        )
       };
       if (affiliate_link !== undefined) updatedCampaign.affiliate_link = affiliate_link;
 

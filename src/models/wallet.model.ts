@@ -130,8 +130,10 @@ export default class Payments extends Model {
       // ── KES B2C withdrawal async callback ──────────────────────────────
       // customer_reference is the request_id we sent as the Relworx reference.
       const kesReq: any = await this.callQuerySafe(
-        `SELECT request_id, user_id, amount, status AS req_status
-         FROM kes_withdrawal_requests WHERE request_id = ? LIMIT 1`,
+        `SELECT r.request_id, r.user_id, r.trans_id, r.amount, r.status AS req_status, COALESCE(t.fee, 0) AS fee
+         FROM kes_withdrawal_requests r
+         LEFT JOIN wl_transactions t ON t.trans_id = r.trans_id
+         WHERE r.request_id = ? LIMIT 1`,
         [customer_reference]
       );
 
@@ -150,6 +152,10 @@ export default class Payments extends Model {
              WHERE request_id = ?`,
             [internal_reference || customer_reference, customer_reference]
           );
+          await this.callQuerySafe(
+            `UPDATE wl_transactions SET status = 'SUCCESS', system_status = 'SUCCESS' WHERE trans_id = ?`,
+            [req.trans_id]
+          );
           this.sendAppNotification(
             req.user_id, 'KES_WITHDRAWAL_SUCCESS',
             '', req.amount.toString(), '', internal_reference || '', 'WALLET'
@@ -162,6 +168,7 @@ export default class Payments extends Model {
              WHERE request_id = ?`,
             [data.message || 'Relworx callback failure', customer_reference]
           );
+          const restoreAmount = Number(req.amount || 0) + Number(req.fee || 0);
           await this.callQuerySafe(
             `UPDATE user_wallets
              SET balance_available = balance_available + ?,
@@ -169,7 +176,11 @@ export default class Payments extends Model {
                  total_withdrawn   = GREATEST(0, total_withdrawn - ?),
                  updated_at        = NOW()
              WHERE user_id = ? AND asset = 'KES'`,
-            [req.amount, req.amount, req.amount, req.user_id]
+            [restoreAmount, restoreAmount, restoreAmount, req.user_id]
+          );
+          await this.callQuerySafe(
+            `UPDATE wl_transactions SET status = 'FAILED', system_status = 'FAILED' WHERE trans_id = ?`,
+            [req.trans_id]
           );
           this.sendAppNotification(
             req.user_id, 'KES_WITHDRAWAL_FAILED',
@@ -235,8 +246,10 @@ export default class Payments extends Model {
       const isFailure = failedStatuses.includes(rawStatus);
 
       const kesReq: any = await this.callQuerySafe(
-        `SELECT request_id, user_id, amount, status AS req_status
-         FROM kes_withdrawal_requests WHERE request_id = ? LIMIT 1`,
+        `SELECT r.request_id, r.user_id, r.trans_id, r.amount, r.status AS req_status, COALESCE(t.fee, 0) AS fee
+         FROM kes_withdrawal_requests r
+         LEFT JOIN wl_transactions t ON t.trans_id = r.trans_id
+         WHERE r.request_id = ? LIMIT 1`,
         [reference]
       );
 
@@ -253,6 +266,10 @@ export default class Payments extends Model {
              WHERE request_id = ?`,
             [providerReference, reference]
           );
+          await this.callQuerySafe(
+            `UPDATE wl_transactions SET status = 'SUCCESS', system_status = 'SUCCESS' WHERE trans_id = ?`,
+            [req.trans_id]
+          );
           this.sendAppNotification(
             req.user_id, "KES_WITHDRAWAL_SUCCESS",
             "", req.amount.toString(), "", providerReference || "", "WALLET"
@@ -267,6 +284,7 @@ export default class Payments extends Model {
              WHERE request_id = ?`,
             [data.message || "Gempay payout failed", reference]
           );
+          const restoreAmount = Number(req.amount || 0) + Number(req.fee || 0);
           await this.callQuerySafe(
             `UPDATE user_wallets
              SET balance_available = balance_available + ?,
@@ -274,7 +292,11 @@ export default class Payments extends Model {
                  total_withdrawn   = GREATEST(0, total_withdrawn - ?),
                  updated_at        = NOW()
              WHERE user_id = ? AND asset = 'KES'`,
-            [req.amount, req.amount, req.amount, req.user_id]
+            [restoreAmount, restoreAmount, restoreAmount, req.user_id]
+          );
+          await this.callQuerySafe(
+            `UPDATE wl_transactions SET status = 'FAILED', system_status = 'FAILED' WHERE trans_id = ?`,
+            [req.trans_id]
           );
           this.sendAppNotification(
             req.user_id, "KES_WITHDRAWAL_FAILED",
@@ -808,19 +830,38 @@ export default class Payments extends Model {
   async getTransactionStatement(data: any) {
     try {
       const { userId, currency } = data;
+      const requestedCurrency = String(currency || 'USD').toUpperCase();
 
-      const wallet_id = await this.getWalletInfoByUserId(userId, currency)
-      if (!wallet_id) {
-        //  return this.makeResponse(404, "Wallet not found", []);
+      let walletIds: string[] = [];
+      if (requestedCurrency === 'ALL') {
+        const wallets: any = await this.callQuerySafe(
+          `select wallet_id from user_wallets where user_id = ?`,
+          [userId]
+        );
+        walletIds = (wallets || []).map((wallet: any) => wallet.wallet_id);
+      } else {
+        const wallet_id = await this.getWalletInfoByUserId(userId, requestedCurrency);
+        if (wallet_id) {
+          walletIds = [wallet_id];
+        }
       }
-      const transactions: any = await this.callQuerySafe(`select * from wl_transactions where (dr_wallet_id='${wallet_id}' or cr_wallet_id='${wallet_id}') and status!='PENDING' order by id desc`);
+
+      if (walletIds.length === 0) {
+        return this.makeResponse(200, "Transaction statement retrieved successfully", []);
+      }
+
+      const placeholders = walletIds.map(() => '?').join(',');
+      const transactions: any = await this.callQuerySafe(
+        `select * from wl_transactions where (dr_wallet_id in (${placeholders}) or cr_wallet_id in (${placeholders})) order by id desc`,
+        [...walletIds, ...walletIds]
+      );
 
       let transaction_statement = []
       for (const transaction of transactions) {
         const dr_wallet_id = transaction.dr_wallet_id
         let op_type = "CREDIT"
         let account_name = transaction.account_name
-        if (dr_wallet_id == wallet_id) {
+        if (walletIds.includes(dr_wallet_id)) {
           op_type = "DEBIT"
           if (transaction.payment_method == 'WALLET') {
             const walletInfo = await this.getWalletInfoByWalletId(dr_wallet_id)
@@ -1502,17 +1543,25 @@ export default class Payments extends Model {
       status:    'PROCESSING',
     });
 
-    // Log debit transaction for audit trail.
-    try {
-      await this.walletTransfer(
-        trans_id, userId, 'MPESA_B2C', 'WITHDRAW',
-        amount, withdrawalFee, 'KES', 'M-Pesa withdrawal', wallet_id, request_id,
-        'MOBILE', phone, ''
-      );
-    } catch (_) {
-      // walletTransfer logging failure must not abort the payout.
-      logger.warn('kesWithdraw: walletTransfer log failed', { trans_id });
-    }
+    await this.insertData('wl_transactions', {
+      trans_id,
+      user_id: userId,
+      dr_wallet_id: wallet_id,
+      cr_wallet_id: 'MPESA_B2C',
+      asset: 'KES',
+      currency: 'KES',
+      amount,
+      trans_type: 'WITHDRAW',
+      payment_method: 'MOBILE',
+      ref_id: request_id,
+      narration: 'M-Pesa withdrawal',
+      account_number: phone,
+      fee: withdrawalFee,
+      account_name: '',
+      system_status: 'PENDING',
+      running_balance: 0,
+      status: 'PROCESSING',
+    });
 
     if (useGempay) {
       const gempayResponse = await gempay.initiateMobilePayout({
@@ -1565,6 +1614,10 @@ export default class Payments extends Model {
          WHERE user_id = ? AND asset = 'KES'`,
         [totalDeduct, totalDeduct, totalDeduct, userId]
       );
+      await this.callQuerySafe(
+        `UPDATE wl_transactions SET status = 'FAILED', system_status = 'FAILED' WHERE trans_id = ?`,
+        [trans_id]
+      );
 
       this.sendAppNotification(
         userId, 'KES_WITHDRAWAL_FAILED',
@@ -1589,11 +1642,15 @@ export default class Payments extends Model {
                        || relworxResponse.data?.reference
                        || request_id;
 
+        await this.callQuerySafe(
+          `UPDATE kes_withdrawal_requests
+           SET status = 'PAID', relworx_ref = ?, updated_at = NOW()
+           WHERE request_id = ?`,
+          [relworx_ref, request_id]
+        );
       await this.callQuerySafe(
-        `UPDATE kes_withdrawal_requests
-         SET status = 'PAID', relworx_ref = ?, updated_at = NOW()
-         WHERE request_id = ?`,
-        [relworx_ref, request_id]
+        `UPDATE wl_transactions SET status = 'SUCCESS', system_status = 'SUCCESS' WHERE trans_id = ?`,
+        [trans_id]
       );
 
       this.sendAppNotification(
@@ -1623,7 +1680,11 @@ export default class Payments extends Model {
              total_withdrawn   = GREATEST(0, total_withdrawn - ?),
              updated_at        = NOW()
          WHERE user_id = ? AND asset = 'KES'`,
-        [amount, amount, amount, userId]
+        [totalDeduct, totalDeduct, totalDeduct, userId]
+      );
+      await this.callQuerySafe(
+        `UPDATE wl_transactions SET status = 'FAILED', system_status = 'FAILED' WHERE trans_id = ?`,
+        [trans_id]
       );
 
       this.sendAppNotification(

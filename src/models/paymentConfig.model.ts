@@ -186,7 +186,7 @@ export default class PaymentConfig extends Model {
             `wallet_id = '${currentTx.cr_wallet_id}'`,
             { 
               balance: parseFloat(crWallet.balance) - currentTx.amount,
-              available_balance: parseFloat(crWallet.available_balance || 0) - currentTx.amount,
+              balance_available: parseFloat(crWallet.balance_available || 0) - currentTx.amount,
               total_earned: parseFloat(crWallet.total_earned || 0) - currentTx.amount
             }
           );
@@ -198,7 +198,7 @@ export default class PaymentConfig extends Model {
             `wallet_id = '${currentTx.dr_wallet_id}'`,
             { 
               balance: parseFloat(drWallet.balance) + currentTx.amount,
-              available_balance: parseFloat(drWallet.available_balance || 0) + currentTx.amount,
+              balance_available: parseFloat(drWallet.balance_available || 0) + currentTx.amount,
               total_withdrawn: parseFloat(drWallet.total_withdrawn || 0) - currentTx.amount
             }
           );
@@ -236,8 +236,8 @@ export default class PaymentConfig extends Model {
         user_id: w.user_id,
         asset: w.asset,
         balance: w.balance,
-        pending_balance: w.pending_balance || 0,
-        available_balance: w.available_balance || 0,
+        pending_balance: w.balance_pending || w.pending_balance || 0,
+        available_balance: w.balance_available || w.available_balance || 0,
         total_earned: w.total_earned || 0,
         total_withdrawn: w.total_withdrawn || 0,
         status: w.status

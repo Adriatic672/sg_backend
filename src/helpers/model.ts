@@ -910,17 +910,23 @@ export default class Model extends BaseModel {
                 return this.makeResponse(400, "Invalid status value");
             }
 
-            // Check if depositId exists
-            const depositExists = await this.selectDataQuery("wl_transactions", `trans_id = '${depositId}' and status='PENDING'`);
+            const depositExists: any = await this.callQuerySafe(
+                `SELECT * FROM wl_transactions WHERE trans_id = ? LIMIT 1`,
+                [depositId]
+            );
             if (depositExists.length === 0) {
                 return this.makeResponse(404, "Deposit not found");
+            }
+
+            if (String(depositExists[0].status || '').toUpperCase() !== 'PENDING') {
+                return this.makeResponse(200, "Deposit already processed");
             }
 
             await this.updateData('wl_transactions', `trans_id = '${depositId}'`, { status: status });
 
             const deposit = depositExists[0];
             const userId = deposit.user_id;
-            const amount = parseFloat(deposit.amount);
+            const depositAmount = parseFloat(deposit.amount);
             const wallet = await this.getUserWallet(userId, deposit.asset);
 
 
@@ -928,8 +934,8 @@ export default class Model extends BaseModel {
             if (status === 'success') {
 
                 if (wallet) {
-                    const newBalance = parseFloat(wallet.balance) + amount;
-                    const newAvailable = parseFloat(wallet.balance_available || 0) + amount;
+                    const newBalance = parseFloat(wallet.balance) + depositAmount;
+                    const newAvailable = parseFloat(wallet.balance_available || 0) + depositAmount;
                     await this.updateData('user_wallets', `wallet_id = '${wallet.wallet_id}'`, {
                         balance: newBalance,
                         balance_available: newAvailable
@@ -937,8 +943,8 @@ export default class Model extends BaseModel {
                 }
             
             const clientName = await this.getClientName(userId)
-            this.sendAppNotification(userId, "DEPOSIT", clientName, amount.toString(), "", "Deposit", "WALLET", process.env.ADMIN_WALLET || "0X0000000000")
-            return this.makeResponse(100, "Deposit status updated successfully");
+            this.sendAppNotification(userId, "DEPOSIT", clientName, depositAmount.toString(), "", "Deposit", "WALLET", process.env.ADMIN_WALLET || "0X0000000000")
+            return this.makeResponse(200, "Deposit status updated successfully");
             }else{
                 return this.makeResponse(400, "Deposit failed");
             }
@@ -1186,13 +1192,13 @@ export default class Model extends BaseModel {
             
             // Update credit wallet states (received money)
             if (trans_type === 'DEPOSIT' || trans_type === 'TRANSFER' || trans_type === 'CR') {
-                crWalletUpdate.available_balance = parseFloat(creditWallet.available_balance || 0) + amount;
+                crWalletUpdate.balance_available = parseFloat(creditWallet.balance_available || 0) + amount;
                 crWalletUpdate.total_earned = parseFloat(creditWallet.total_earned || 0) + amount;
             }
             
             // Update debit wallet states (sent money)
             if (trans_type === 'WITHDRAW' || trans_type === 'TRANSFER' || trans_type === 'DR') {
-                drWalletUpdate.available_balance = parseFloat(debitWallet.available_balance || 0) - amount;
+                drWalletUpdate.balance_available = parseFloat(debitWallet.balance_available || 0) - amount;
                 drWalletUpdate.total_withdrawn = parseFloat(debitWallet.total_withdrawn || 0) + amount;
             }
             

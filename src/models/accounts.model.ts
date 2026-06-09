@@ -188,7 +188,13 @@ class Accounts extends Model {
     return this.makeResponse(200, "success", levels);
   }
 
+  private normalizeFollowersCount(value: any): number {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
+  }
+
   async updateFollowersCount(socialUsername: string, site_id: any, userId: any, followersCount: number) {
+    followersCount = this.normalizeFollowersCount(followersCount);
     if (followersCount > 0) {
       return followersCount;
     }
@@ -205,6 +211,7 @@ class Accounts extends Model {
     } else if (site_id == 3) {
       followersCount = await new FacebookAPI().getFollowers(socialUsername)
     }
+    followersCount = this.normalizeFollowersCount(followersCount);
     console.log("followersCount", followersCount);
      const sites = await this.selectDataQuery(`sm_site_users`, `site_id='${site_id}' and user_id='${userId}'`);
      if (sites.length > 0) {
@@ -253,11 +260,13 @@ class Accounts extends Model {
           this.logOperation("SOCIAL_VERIFICATION_2", userId, "SOCIAL_VERIFICATION", instagram, "This username is already verified on this site");
           console.log("SocialVerifier::instagram", instagram);
           socialUsername = instagram.username;
+          followersCount = instagram.followerCount || 0;
           break;
         case 'X':
           const x = await SocialVerifier.verify('twitter', token);
           console.log("SocialVerifier::X", x);
           socialUsername = x.username;
+          followersCount = x.followerCount || 0;
           break;
         case 'facebook':
           // For Facebook, get username from Graph API

@@ -59,6 +59,9 @@ export class SocialVerifier {
           headers: {
             Authorization: `Bearer ${token}`,
           },
+          params: {
+            'user.fields': 'public_metrics,profile_image_url',
+          },
         });
 
         console.log('Twitter API v2 user data:', data);

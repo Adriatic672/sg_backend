@@ -26,6 +26,17 @@ function appOAuthRedirectUrl(query: string) {
     return `${appDeepLink}/oauth2redirect?${query}`;
 }
 
+function appOAuthStatusRedirectUrl(status: 'success' | 'error', state: string, message?: string) {
+    const query = new URLSearchParams({
+        status,
+        state,
+    });
+    if (message) {
+        query.set('message', message);
+    }
+    return appOAuthRedirectUrl(query.toString());
+}
+
 function renderAppRedirectPage(message: string, redirectUrl: string) {
     const redirectJson = JSON.stringify(redirectUrl);
     const safeMessage = escapeHtml(message);
@@ -69,8 +80,22 @@ function cleanupOAuthStatuses() {
     }
 }
 
-function renderOAuthCompletePage(message: string) {
+function renderOAuthCompletePage(message: string, redirectUrl?: string) {
     const safeMessage = escapeHtml(message);
+    const redirectScript = redirectUrl ? `
+<a id="open-app" href="${redirectUrl}">Open Social Gems</a>
+<script>
+var redirectUrl = ${JSON.stringify(redirectUrl)};
+function openApp() {
+  window.location.replace(redirectUrl);
+}
+document.getElementById('open-app').addEventListener('click', function(event) {
+  event.preventDefault();
+  openApp();
+});
+setTimeout(openApp, 400);
+</script>
+` : '';
     return `
 <!DOCTYPE html>
 <html>
@@ -87,6 +112,7 @@ body { font-family: Arial; display: flex; justify-content: center; align-items: 
 <div class="container">
 <p>${safeMessage}</p>
 <p>You can return to Social Gems.</p>
+${redirectScript}
 </div>
 </body>
 </html>
@@ -117,7 +143,10 @@ async function handleOAuth2Redirect(req: Request, res: Response) {
             if (state) {
                 setOAuthStatus(state as string, 'error', error as string);
             }
-            return res.send(renderOAuthCompletePage('Authorization was cancelled or failed.'));
+            return res.send(renderOAuthCompletePage(
+                'Authorization was cancelled or failed.',
+                state ? appOAuthStatusRedirectUrl('error', state as string, error as string) : undefined
+            ));
         }
 
         if (!code) {
@@ -140,18 +169,28 @@ async function handleOAuth2Redirect(req: Request, res: Response) {
         const result: any = await socialModel.completeOAuthRedirect(code as string, state as string);
         if (result?.status === 200) {
             setOAuthStatus(state as string, 'success', 'Connected successfully', result);
-            return res.send(renderOAuthCompletePage('Connected successfully.'));
+            return res.send(renderOAuthCompletePage(
+                'Connected successfully.',
+                appOAuthStatusRedirectUrl('success', state as string)
+            ));
         }
 
-        setOAuthStatus(state as string, 'error', result?.message || 'Failed to connect account', result);
-        return res.send(renderOAuthCompletePage(result?.message || 'Failed to connect account.'));
+        const errorMessage = result?.message || 'Failed to connect account';
+        setOAuthStatus(state as string, 'error', errorMessage, result);
+        return res.send(renderOAuthCompletePage(
+            errorMessage,
+            appOAuthStatusRedirectUrl('error', state as string, errorMessage)
+        ));
     } catch (error: any) {
         console.error('OAuth2 redirect error:', error);
         const state = req.query.state;
         if (state) {
             setOAuthStatus(state as string, 'error', error.message);
         }
-        return res.status(500).send(renderOAuthCompletePage(`Error: ${error.message}`));
+        return res.status(500).send(renderOAuthCompletePage(
+            `Error: ${error.message}`,
+            state ? appOAuthStatusRedirectUrl('error', state as string, error.message) : undefined
+        ));
     }
 }
 

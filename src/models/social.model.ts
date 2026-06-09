@@ -65,8 +65,8 @@ export default class SocialModel extends Model {
             authUrl: 'https://www.facebook.com/v19.0/dialog/oauth',
             tokenUrl: 'https://graph.facebook.com/v19.0/oauth/access_token',
             revokeUrl: '',
-            clientKey: process.env.FACEBOOK_CLIENT_ID || process.env.INSTA_PROD_CLIENTKEY || process.env.INSTAGRAM_CLIENT_ID || "",
-            clientSecret: process.env.FACEBOOK_CLIENT_SECRET || process.env.INSTA_PROD_SECRETKEY || process.env.INSTAGRAM_CLIENT_SECRET || "",
+            clientKey: process.env.FACEBOOK_CLIENT_ID || "",
+            clientSecret: process.env.FACEBOOK_CLIENT_SECRET || "",
             redirectUri: process.env.FACEBOOK_REDIRECT_URI || process.env.REDIRECT_URI || "https://sg-backend-0cs6.onrender.com/oauth/oauth2redirect",
         });
 
@@ -256,7 +256,10 @@ export default class SocialModel extends Model {
     async initXAuth(userId: string) {
         try {
             const config = this.platforms.get('x')!;
-            const scopes = ['tweet.read', 'users.read', 'offline.access'];
+            if (!config.clientKey) {
+                return this.makeResponse(500, "X OAuth is not configured. Set X_CLIENT_ID or TWITTER_CLIENT_ID.");
+            }
+            const scopes = ['tweet.read', 'users.read'];
 
             const state = this.generateState();
             const { codeVerifier, codeChallenge } = this.genPkcePair();
@@ -441,6 +444,9 @@ export default class SocialModel extends Model {
     async initFacebookAuth(userId: string) {
         try {
             const config = this.platforms.get('facebook')!;
+            if (!config.clientKey || !config.clientSecret) {
+                return this.makeResponse(500, "Facebook OAuth is not configured. Set FACEBOOK_CLIENT_ID and FACEBOOK_CLIENT_SECRET.");
+            }
             // Use basic scopes that don't require app review for local testing
             // For production with Pages features, you'll need app review approval
             const scopes = ['public_profile', 'email'];

@@ -9,7 +9,60 @@ const applyJWTConditionally = (req: Request, res: Response, next: any) => {
     JWTMiddleware.verifyToken(req, res, next);
 };
 
+function appOAuthRedirectUrl(query: string) {
+    const appDeepLink = (process.env.APP_DEEP_LINK || 'socialgems://app.socialgems.me').replace(/\/+$/, '');
+    return `${appDeepLink}/oauth2redirect?${query}`;
+}
 
+function escapeHtml(value: string) {
+    return value
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function renderAppRedirectPage(message: string, redirectUrl: string) {
+    const redirectJson = JSON.stringify(redirectUrl);
+    const safeMessage = escapeHtml(message);
+    return `
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Connecting...</title>
+<style>
+body { font-family: Arial; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #f0f2f5; }
+.container { text-align: center; padding: 40px; background: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+.spinner { border: 4px solid #f3f3f3; border-top: 4px solid #1877f2; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto 20px; }
+a { display: inline-block; margin-top: 16px; color: #1877f2; font-weight: 600; }
+@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="container">
+<div class="spinner"></div>
+<p>${safeMessage}</p>
+<a id="open-app" href="${redirectUrl}">Open Social Gems</a>
+</div>
+<script>
+var redirectUrl = ${redirectJson};
+function openApp() {
+  window.location.replace(redirectUrl);
+}
+document.getElementById('open-app').addEventListener('click', function(event) {
+  event.preventDefault();
+  openApp();
+});
+setTimeout(openApp, 250);
+setTimeout(openApp, 1200);
+</script>
+</body>
+</html>
+`;
+}
 
 router.get('/init/:platform', applyJWTConditionally, initSocial);
 router.post('/disconnect/:platform', applyJWTConditionally, disconnectSocial);
@@ -31,33 +84,10 @@ async function handleOAuth2Redirect(req: Request, res: Response) {
 
         if (error) {
             console.error('OAuth error:', error);
-            return res.send(`
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Connecting...</title>
-<style>
-body { font-family: Arial; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #f0f2f5; }
-.container { text-align: center; padding: 40px; background: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-.spinner { border: 4px solid #f3f3f3; border-top: 4px solid #1877f2; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto 20px; }
-@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-</style>
-</head>
-<body>
-<div class="container">
-<div class="spinner"></div>
-<p>Connecting your account...</p>
-</div>
-<script>
-setTimeout(function() {
-window.location.href = '${process.env.APP_DEEP_LINK || 'socialgems://app.socialgems.me'}/oauth2redirect?error=${encodeURIComponent(error as string)}';
-}, 500);
-</script>
-</body>
-</html>
-`);
+            return res.send(renderAppRedirectPage(
+                'Connecting your account...',
+                appOAuthRedirectUrl(`error=${encodeURIComponent(error as string)}`)
+            ));
         }
 
         if (!code) {
@@ -65,47 +95,17 @@ window.location.href = '${process.env.APP_DEEP_LINK || 'socialgems://app.socialg
         }
 
         console.log('Sending success redirect with code');
-        
-        return res.send(`
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Connecting...</title>
-<style>
-body { font-family: Arial; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #f0f2f5; }
-.container { text-align: center; padding: 40px; background: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-.spinner { border: 4px solid #f3f3f3; border-top: 4px solid #1877f2; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto 20px; }
-@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-</style>
-</head>
-<body>
-<div class="container">
-<div class="spinner"></div>
-<p>Completing login...</p>
-</div>
-<script>
-console.log('Redirecting to app with code...');
-window.location.href = '${process.env.APP_DEEP_LINK || 'socialgems://app.socialgems.me'}/oauth2redirect?code=${code}&state=${state}';
-</script>
-</body>
-</html>
-`);
+
+        return res.send(renderAppRedirectPage(
+            'Completing login...',
+            appOAuthRedirectUrl(`code=${encodeURIComponent(code as string)}&state=${encodeURIComponent((state as string) || '')}`)
+        ));
     } catch (error: any) {
         console.error('OAuth2 redirect error:', error);
-        return res.status(500).send(`
-<!DOCTYPE html>
-<html>
-<head><title>Error</title></head>
-<body>
-<p>Error: ${error.message}</p>
-<script>
-window.location.href = '${process.env.APP_DEEP_LINK || 'socialgems://app.socialgems.me'}/oauth2redirect?error=${encodeURIComponent(error.message)}';
-</script>
-</body>
-</html>
-`);
+        return res.status(500).send(renderAppRedirectPage(
+            `Error: ${error.message}`,
+            appOAuthRedirectUrl(`error=${encodeURIComponent(error.message)}`)
+        ));
     }
 }
 

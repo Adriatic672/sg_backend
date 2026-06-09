@@ -203,10 +203,11 @@ class Accounts extends Model {
 
     } else if (site_id == 2) {
       followersCount = await new TikTokAPIv2().fetchUserFollowers(socialUsername)
-      console.log("followersCount", followersCount);
+      console.log("RapidAPI TikTok followers", { socialUsername, followersCount });
 
     } else if (site_id == 1) {
       followersCount = await new RapiAPI().getXFollowers(socialUsername)
+      console.log("RapidAPI X followers", { socialUsername, followersCount });
 
     } else if (site_id == 3) {
       followersCount = await new FacebookAPI().getFollowers(socialUsername)

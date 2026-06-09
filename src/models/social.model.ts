@@ -332,7 +332,7 @@ export default class SocialModel extends Model {
             return tokens.access_token;
         } catch (error) {
             console.log("X callback error", error);
-            return null;
+            throw error;
         }
     }
 
@@ -703,17 +703,32 @@ export default class SocialModel extends Model {
             code_verifier: rec.codeVerifier,
         };
 
-        // Only add client_secret if it's configured (for confidential clients)
+        const headers: any = { "Content-Type": "application/x-www-form-urlencoded" };
+
+        // X expects confidential clients to authenticate with HTTP Basic auth.
         if (config.clientSecret && config.clientSecret.trim() !== '') {
-            bodyData.client_secret = config.clientSecret;
+            const basicAuth = Buffer.from(`${config.clientKey}:${config.clientSecret}`).toString('base64');
+            headers.Authorization = `Basic ${basicAuth}`;
         }
 
         const body = qs.stringify(bodyData);
 
-        const resp = await axios.post(config.tokenUrl, body, {
-            headers: { "Content-Type": "application/x-www-form-urlencoded" },
-            timeout: 10000,
-        });
+        let resp;
+        try {
+            resp = await axios.post(config.tokenUrl, body, {
+                headers,
+                timeout: 10000,
+            });
+        } catch (error: any) {
+            console.log("X token exchange error", {
+                status: error.response?.status,
+                data: error.response?.data,
+                redirectUri: config.redirectUri,
+                hasClientId: Boolean(config.clientKey),
+                hasClientSecret: Boolean(config.clientSecret),
+            });
+            throw error;
+        }
 
         const tokens = {
             ...resp.data,

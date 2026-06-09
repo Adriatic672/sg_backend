@@ -4,17 +4,11 @@ import { JWTMiddleware } from '../helpers/jwt.middleware';
 
 const router = express.Router();
 const socialModel = new SocialModel();
+const oauthStatuses = new Map<string, { status: 'pending' | 'success' | 'error'; message: string; result?: any; updatedAt: number }>();
 
 const applyJWTConditionally = (req: Request, res: Response, next: any) => {
     JWTMiddleware.verifyToken(req, res, next);
 };
-
-function appOAuthRedirectUrl(query: string) {
-    const appDeepLink = (process.env.APP_DEEP_LINK || 'socialgems://app.socialgems.me')
-        .replace(/\/+$/, '')
-        .replace(/\/oauth2redirect$/i, '');
-    return `${appDeepLink}/oauth2redirect?${query}`;
-}
 
 function escapeHtml(value: string) {
     return value
@@ -23,6 +17,13 @@ function escapeHtml(value: string) {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
+}
+
+function appOAuthRedirectUrl(query: string) {
+    const appDeepLink = (process.env.APP_DEEP_LINK || 'socialgems://app.socialgems.me')
+        .replace(/\/+$/, '')
+        .replace(/\/oauth2redirect$/i, '');
+    return `${appDeepLink}/oauth2redirect?${query}`;
 }
 
 function renderAppRedirectPage(message: string, redirectUrl: string) {
@@ -35,32 +36,58 @@ function renderAppRedirectPage(message: string, redirectUrl: string) {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Connecting...</title>
+</head>
+<body>
+<p>${safeMessage}</p>
+<script>
+var redirectUrl = ${redirectJson};
+setTimeout(function() {
+  window.location.replace(redirectUrl);
+}, 250);
+</script>
+</body>
+</html>
+`;
+}
+
+function setOAuthStatus(state: string, status: 'pending' | 'success' | 'error', message: string, result?: any) {
+    oauthStatuses.set(state, {
+        status,
+        message,
+        result,
+        updatedAt: Date.now(),
+    });
+}
+
+function cleanupOAuthStatuses() {
+    const maxAgeMs = 10 * 60 * 1000;
+    const now = Date.now();
+    for (const [state, value] of oauthStatuses.entries()) {
+        if (now - value.updatedAt > maxAgeMs) {
+            oauthStatuses.delete(state);
+        }
+    }
+}
+
+function renderOAuthCompletePage(message: string) {
+    const safeMessage = escapeHtml(message);
+    return `
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Social Gems</title>
 <style>
 body { font-family: Arial; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #f0f2f5; }
 .container { text-align: center; padding: 40px; background: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-.spinner { border: 4px solid #f3f3f3; border-top: 4px solid #1877f2; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto 20px; }
-a { display: inline-block; margin-top: 16px; color: #1877f2; font-weight: 600; }
-@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
 <div class="container">
-<div class="spinner"></div>
 <p>${safeMessage}</p>
-<a id="open-app" href="${redirectUrl}">Open Social Gems</a>
+<p>You can return to Social Gems.</p>
 </div>
-<script>
-var redirectUrl = ${redirectJson};
-function openApp() {
-  window.location.replace(redirectUrl);
-}
-document.getElementById('open-app').addEventListener('click', function(event) {
-  event.preventDefault();
-  openApp();
-});
-setTimeout(openApp, 250);
-setTimeout(openApp, 1200);
-</script>
 </body>
 </html>
 `;
@@ -71,6 +98,7 @@ router.post('/disconnect/:platform', applyJWTConditionally, disconnectSocial);
 router.post('/callback', applyJWTConditionally, socialCallback);
 router.get('/callback', socialCallbackGet);
 router.get('/oauth2redirect', handleOAuth2Redirect);
+router.get('/status/:state', applyJWTConditionally, oauthStatus);
 
 // New route for Instagram username connection (RapidAPI)
 router.post('/connect-instagram', applyJWTConditionally, connectInstagramUsername);
@@ -86,29 +114,69 @@ async function handleOAuth2Redirect(req: Request, res: Response) {
 
         if (error) {
             console.error('OAuth error:', error);
-            return res.send(renderAppRedirectPage(
-                'Connecting your account...',
-                appOAuthRedirectUrl(`error=${encodeURIComponent(error as string)}`)
-            ));
+            if (state) {
+                setOAuthStatus(state as string, 'error', error as string);
+            }
+            return res.send(renderOAuthCompletePage('Authorization was cancelled or failed.'));
         }
 
         if (!code) {
             return res.status(400).json({ error: 'No code provided' });
         }
 
-        console.log('Sending success redirect with code');
+        if (!state) {
+            return res.status(400).json({ error: 'No state provided' });
+        }
 
-        return res.send(renderAppRedirectPage(
-            'Completing login...',
-            appOAuthRedirectUrl(`code=${encodeURIComponent(code as string)}&state=${encodeURIComponent((state as string) || '')}`)
-        ));
+        const platform = await socialModel.getOAuthPlatformForState(state as string);
+        if (platform !== 'x') {
+            return res.send(renderAppRedirectPage(
+                'Completing login...',
+                appOAuthRedirectUrl(`code=${encodeURIComponent(code as string)}&state=${encodeURIComponent(state as string)}`)
+            ));
+        }
+
+        console.log('Completing OAuth redirect on backend');
+        const result: any = await socialModel.completeOAuthRedirect(code as string, state as string);
+        if (result?.status === 200) {
+            setOAuthStatus(state as string, 'success', 'Connected successfully', result);
+            return res.send(renderOAuthCompletePage('Connected successfully.'));
+        }
+
+        setOAuthStatus(state as string, 'error', result?.message || 'Failed to connect account', result);
+        return res.send(renderOAuthCompletePage(result?.message || 'Failed to connect account.'));
     } catch (error: any) {
         console.error('OAuth2 redirect error:', error);
-        return res.status(500).send(renderAppRedirectPage(
-            `Error: ${error.message}`,
-            appOAuthRedirectUrl(`error=${encodeURIComponent(error.message)}`)
-        ));
+        const state = req.query.state;
+        if (state) {
+            setOAuthStatus(state as string, 'error', error.message);
+        }
+        return res.status(500).send(renderOAuthCompletePage(`Error: ${error.message}`));
     }
+}
+
+async function oauthStatus(req: Request, res: Response) {
+    cleanupOAuthStatuses();
+    const state = req.params.state;
+    const status = oauthStatuses.get(state);
+
+    if (!status) {
+        return res.status(200).json({
+            status: 200,
+            message: 'pending',
+            data: { status: 'pending' },
+        });
+    }
+
+    return res.status(200).json({
+        status: 200,
+        message: status.message,
+        data: {
+            status: status.status,
+            message: status.message,
+            result: status.result,
+        },
+    });
 }
 
 async function socialCallbackGet(req: Request, res: Response) {

@@ -120,7 +120,7 @@ export default class SocialModel extends Model {
                 `&code_challenge=${encodeURIComponent(codeChallenge)}` +
                 `&code_challenge_method=S256`;
 
-            return this.makeResponse(200, "success", { authUrl: url });
+            return this.makeResponse(200, "success", { authUrl: url, state });
         } catch (error) {
             return this.makeResponse(500, `Failed to initialize TikTok auth: ${error}`);
         }
@@ -161,6 +161,50 @@ export default class SocialModel extends Model {
                 }
                 return this.makeResponse(500, "Failed to get Facebook tokens");
         }
+    }
+
+    async completeOAuthRedirect(code: string, state: string) {
+        const rec: any = await this.loadOAuthStateByState(state);
+        if (!rec) {
+            return this.makeResponse(400, "Invalid or expired OAuth state");
+        }
+
+        switch (rec.platform) {
+            case 'x':
+                return this.socialCallback({
+                    site_id: 1,
+                    site_name: 'x',
+                    state,
+                    auth_code: code,
+                    userId: rec.userId,
+                    user_id: rec.userId,
+                });
+            case 'tiktok':
+                return this.socialCallback({
+                    site_id: 2,
+                    site_name: 'tiktok',
+                    state,
+                    auth_code: code,
+                    userId: rec.userId,
+                    user_id: rec.userId,
+                });
+            case 'facebook':
+                return this.socialCallback({
+                    site_id: 3,
+                    site_name: 'facebook',
+                    state,
+                    auth_code: code,
+                    userId: rec.userId,
+                    user_id: rec.userId,
+                });
+            default:
+                return this.makeResponse(400, "Unsupported OAuth platform");
+        }
+    }
+
+    async getOAuthPlatformForState(state: string) {
+        const rec: any = await this.loadOAuthStateByState(state);
+        return rec?.platform || null;
     }
 
     async completeVerification(token: any, body: any) {
@@ -275,7 +319,7 @@ export default class SocialModel extends Model {
                 `&code_challenge=${encodeURIComponent(codeChallenge)}` +
                 `&code_challenge_method=S256`;
 
-            return this.makeResponse(200, "success", { authUrl: url });
+            return this.makeResponse(200, "success", { authUrl: url, state });
         } catch (error) {
             return this.makeResponse(500, `Failed to initialize X auth: ${error}`);
         }
@@ -573,6 +617,15 @@ export default class SocialModel extends Model {
         // delete this in the future
         //  await this.deleteData("oauth_states", `platform='${platform}' AND state='${state}'`);
         return result[0];
+    }
+
+    private async loadOAuthStateByState(state: string) {
+        const result: any = await this.callParameterizedQuery(
+            "SELECT * FROM oauth_states WHERE state = ?",
+            [state]
+        );
+
+        return result.length === 0 ? null : result[0];
     }
 
     private async exchangeTikTokTokens(code: string, state: string): Promise<SocialTokens> {

@@ -10,7 +10,9 @@ const applyJWTConditionally = (req: Request, res: Response, next: any) => {
 };
 
 function appOAuthRedirectUrl(query: string) {
-    const appDeepLink = (process.env.APP_DEEP_LINK || 'socialgems://app.socialgems.me').replace(/\/+$/, '');
+    const appDeepLink = (process.env.APP_DEEP_LINK || 'socialgems://app.socialgems.me')
+        .replace(/\/+$/, '')
+        .replace(/\/oauth2redirect$/i, '');
     return `${appDeepLink}/oauth2redirect?${query}`;
 }
 

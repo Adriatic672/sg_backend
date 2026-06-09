@@ -662,8 +662,13 @@ export default class SocialModel extends Model {
             timeout: 10000,
         });
 
-        await this.storeSocialTokens('x', state, resp.data);
-        return resp.data as SocialTokens;
+        const tokens = {
+            ...resp.data,
+            user_id: rec.userId,
+        } as SocialTokens;
+
+        await this.storeSocialTokens('x', rec.userId, tokens);
+        return tokens;
     }
 
     private async refreshXTokens(refreshToken: string, config: SocialPlatform): Promise<SocialTokens> {

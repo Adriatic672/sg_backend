@@ -47,63 +47,42 @@ export class SocialVerifier {
   }
 
   private static async verifyTwitter(token: string): Promise<SocialUserInfo> {
-    // Use v2 for production, skip verification for local testing
-    const useV2 = process.env.TWITTER_API_VERSION === 'v2';
-    
-    if (useV2) {
-      // Twitter API v2 - requires project enrollment
-      const url = 'https://api.twitter.com/2/users/me';
-      
-      try {
-        const { data } = await axios.get(url, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-          params: {
-            'user.fields': 'public_metrics,profile_image_url',
-          },
-        });
+    if (process.env.TWITTER_SKIP_API_VERIFICATION === 'true') {
+      throw new Error('X verification cannot be skipped because follower lookup requires the public X username.');
+    }
 
-        console.log('Twitter API v2 user data:', data);
-        const user = data?.data;
-        if (!user?.username) throw new Error('Invalid Twitter user data');
-        
-        return {
-          platform: 'twitter',
-          username: user.username,
-          displayName: user.name,
-          avatarUrl: user.profile_image_url,
-          followerCount: user.public_metrics?.followers_count || 0,
-          raw: user,
-        };
-      } catch (err: any) {
-        console.log('Twitter v2 verification failed:', err.response?.data || err.message);
-        
-        // If it's a project enrollment error, provide helpful message
-        if (err.response?.data?.reason === 'client-not-enrolled') {
-          throw new Error('Twitter API v2 requires project enrollment. Please enroll your app in a Twitter developer project at https://developer.twitter.com/en/portal/projects-and-apps');
-        }
-        
-        throw new Error(`Twitter verification failed: ${formatError(err)}`);
-      }
-    } else {
-      // Local testing mode - skip API call
-      // The OAuth flow already validated the user, so we trust the connection
-      console.log('Twitter local mode - OAuth validated, skipping API verification');
-      
-      // Return placeholder - username will be updated when user provides it
-      // or when you switch to v2 with proper enrollment
+    const url = 'https://api.twitter.com/2/users/me';
+
+    try {
+      const { data } = await axios.get(url, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        params: {
+          'user.fields': 'public_metrics,profile_image_url',
+        },
+      });
+
+      console.log('Twitter API v2 user data:', data);
+      const user = data?.data;
+      if (!user?.username) throw new Error('Invalid Twitter user data');
+
       return {
         platform: 'twitter',
-        username: `twitter_${Date.now()}`, // Temporary unique username
-        displayName: 'Twitter User',
-        avatarUrl: '',
-        followerCount: 0,
-        raw: { 
-          verified_locally: true,
-          note: 'Switch to TWITTER_API_VERSION=v2 for full verification'
-        }
+        username: user.username,
+        displayName: user.name,
+        avatarUrl: user.profile_image_url,
+        followerCount: user.public_metrics?.followers_count || 0,
+        raw: user,
       };
+    } catch (err: any) {
+      console.log('Twitter v2 verification failed:', err.response?.data || err.message);
+
+      if (err.response?.data?.reason === 'client-not-enrolled') {
+        throw new Error('Twitter API v2 requires project enrollment. Please enroll your app in a Twitter developer project at https://developer.twitter.com/en/portal/projects-and-apps');
+      }
+
+      throw new Error(`Twitter verification failed: ${formatError(err)}`);
     }
   }
 
@@ -125,8 +104,12 @@ export class SocialVerifier {
       const user:TikTokUserInfo = data?.data?.user;
       if (!user) throw new Error('Invalid TikTok user data');
 
-      // username is required; display_name may be empty on restricted scopes
-      const username = user.username || user.open_id || 'unknown';
+      // RapidAPI follower lookup requires the public TikTok handle, not open_id.
+      const username = user.username;
+      if (!username) {
+        throw new Error('TikTok did not return a public username. Ensure user.info.profile is approved for this TikTok app.');
+      }
+
       return {
         platform: 'tiktok',
         username,

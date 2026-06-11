@@ -80,6 +80,16 @@ export default class SocialModel extends Model {
             clientSecret: process.env.INSTA_PROD_SECRETKEY || process.env.INSTAGRAM_CLIENT_SECRET || "",
             redirectUri: process.env.REDIRECT_URI || "https://app.socialgems.me/oauth2redirect",
         });
+
+        this.platforms.set('linkedin', {
+            name: 'LinkedIn',
+            authUrl: 'https://www.linkedin.com/oauth/v2/authorization',
+            tokenUrl: 'https://www.linkedin.com/oauth/v2/accessToken',
+            revokeUrl: '',
+            clientKey: process.env.LINKEDIN_CLIENT_ID || "",
+            clientSecret: process.env.LINKEDIN_CLIENT_SECRET || "",
+            redirectUri: process.env.LINKEDIN_REDIRECT_URI || process.env.REDIRECT_URI || "https://sg-backend-0cs6.onrender.com/oauth/oauth2redirect",
+        });
     }
 
     async initSocial(platform: string, userId: string, options?: { forcePrompt?: boolean }) {
@@ -92,6 +102,8 @@ export default class SocialModel extends Model {
                 return this.initInstagramAuth(userId);
             case 'facebook':
                 return this.initFacebookAuth(userId);
+            case 'linkedin':
+                return this.initLinkedInAuth(userId, options);
         }
     }
 
@@ -175,6 +187,13 @@ export default class SocialModel extends Model {
                     return this.completeVerification(facebook_token, body);
                 }
                 return this.makeResponse(500, "Failed to get Facebook tokens");
+            case 'linkedin':
+                const linkedin_token: any = await this.handleLinkedInCallback(code, state);
+                console.log("LinkedIn tokens", linkedin_token);
+                if (linkedin_token) {
+                    return this.completeVerification(linkedin_token, body);
+                }
+                return this.makeResponse(500, "Failed to get LinkedIn tokens");
         }
     }
 
@@ -207,6 +226,15 @@ export default class SocialModel extends Model {
                 return this.socialCallback({
                     site_id: 3,
                     site_name: 'facebook',
+                    state,
+                    auth_code: code,
+                    userId: rec.userId,
+                    user_id: rec.userId,
+                });
+            case 'linkedin':
+                return this.socialCallback({
+                    site_id: 5,
+                    site_name: 'linkedin',
                     state,
                     auth_code: code,
                     userId: rec.userId,
@@ -262,6 +290,8 @@ export default class SocialModel extends Model {
                 return this.disconnectInstagram(access_token, userId);
             case 'facebook':
                 return this.disconnectFacebook(access_token, userId);
+            case 'linkedin':
+                return this.disconnectLinkedIn(access_token, userId);
         }
     }
 
@@ -898,6 +928,127 @@ export default class SocialModel extends Model {
         });
 
         return resp.data;
+    }
+
+    async initLinkedInAuth(userId: string, options?: { forcePrompt?: boolean }) {
+        try {
+            const config = this.platforms.get('linkedin')!;
+            if (!config.clientKey || !config.clientSecret) {
+                return this.makeResponse(500, "LinkedIn OAuth is not configured. Set LINKEDIN_CLIENT_ID and LINKEDIN_CLIENT_SECRET.");
+            }
+            const scopes = ['openid', 'profile', 'email'];
+            const state = this.generateState();
+            await this.saveOAuthState('linkedin', state, userId, '');
+
+            let url =
+                `${config.authUrl}?client_id=${config.clientKey}` +
+                `&response_type=code` +
+                `&scope=${encodeURIComponent(scopes.join(' '))}` +
+                `&redirect_uri=${encodeURIComponent(config.redirectUri)}` +
+                `&state=${encodeURIComponent(state)}`;
+
+            const forcePrompt = options?.forcePrompt === true;
+            if (forcePrompt) {
+                url += `&prompt=login`;
+            }
+
+            console.log('LinkedIn Auth URL:', url.substring(0, 200) + '...');
+            return this.makeResponse(200, "success", { authUrl: url, state });
+        } catch (error) {
+            return this.makeResponse(500, `Failed to initialize LinkedIn auth: ${error}`);
+        }
+    }
+
+    async handleLinkedInCallback(code: string, state: string) {
+        try {
+            const tokens = await this.exchangeLinkedInTokens(code, state);
+            console.log("LinkedIn tokens", tokens);
+            return tokens.access_token;
+        } catch (error) {
+            console.log("LinkedIn callback error", error);
+            throw error;
+        }
+    }
+
+    async disconnectLinkedIn(accessToken: string, userId: string) {
+        try {
+            await this.removeSocialTokens('linkedin', accessToken, userId);
+            return this.makeResponse(200, "success", { message: 'LinkedIn disconnected successfully' });
+        } catch (error) {
+            return this.makeResponse(500, `Failed to disconnect LinkedIn: ${error}`);
+        }
+    }
+
+    private async exchangeLinkedInTokens(code: string, state: string): Promise<SocialTokens> {
+        const config = this.platforms.get('linkedin')!;
+        const rec = await this.loadAndDeleteOAuthState('linkedin', state);
+        if (!rec) throw new Error("Invalid or expired OAuth state");
+
+        const body = qs.stringify({
+            grant_type: 'authorization_code',
+            code,
+            redirect_uri: config.redirectUri,
+            client_id: config.clientKey,
+            client_secret: config.clientSecret,
+        });
+
+        let resp;
+        try {
+            resp = await axios.post(config.tokenUrl, body, {
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                timeout: 10000,
+            });
+        } catch (error: any) {
+            console.log("LinkedIn token exchange error", {
+                status: error.response?.status,
+                data: error.response?.data,
+            });
+            throw error;
+        }
+
+        const accessToken = resp.data.access_token;
+
+        // Fetch profile via OIDC userinfo endpoint
+        let username = '';
+        let linkedInUserId = '';
+        try {
+            const profileResp = await axios.get('https://api.linkedin.com/v2/userinfo', {
+                headers: { Authorization: `Bearer ${accessToken}` },
+                timeout: 10000,
+            });
+            username = profileResp.data.name || profileResp.data.given_name || '';
+            linkedInUserId = profileResp.data.sub || '';
+
+            // Store connection in sm_site_users
+            const site: any = await this.getsiteByName('linkedin');
+            if (site && site.length > 0) {
+                const siteId = site[0].site_id;
+                await this.deleteData('sm_site_users', `user_id='${rec.userId}' AND site_id='${siteId}'`);
+                await this.insertData('sm_site_users', {
+                    user_id: rec.userId,
+                    site_id: siteId,
+                    username,
+                    followers: 0,
+                    is_verified: 'yes',
+                    link: `https://www.linkedin.com/in/${linkedInUserId}`,
+                    created_on: new Date(),
+                    last_synced_at: new Date(),
+                });
+                await this.updateData("users", `user_id='${rec.userId}'`, { is_social_verified: 'yes' });
+            }
+        } catch (profileError) {
+            console.log("LinkedIn profile fetch error", profileError);
+        }
+
+        const tokens = {
+            ...resp.data,
+            user_id: rec.userId,
+            username,
+            open_id: linkedInUserId,
+        } as SocialTokens;
+
+        await this.storeSocialTokens('linkedin', rec.userId, tokens);
+        return tokens;
     }
 
     private async storeSocialTokens(platform: string, userId: string, tokens: SocialTokens) {

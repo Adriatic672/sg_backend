@@ -254,11 +254,20 @@ export default class SocialModel extends Model {
         try {
             const tokens = await this.exchangeTikTokTokens(code, state);
             console.log("TikTok tokens", tokens);
-            
+
+            // Persist the tokens so we can refresh/revoke later
+            try {
+                if (tokens && tokens.user_id) {
+                    await this.storeSocialTokens('tiktok', tokens.user_id, tokens as any);
+                }
+            } catch (storeErr) {
+                console.error('Failed to store TikTok tokens:', storeErr);
+            }
+
             // Get site_id for TikTok
             const site: any = await this.getsiteByName('tiktok');
             const site_id = site.length > 0 ? site[0].site_id : null;
-            
+
             return {
                 access_token: tokens.access_token,
                 user_id: tokens.user_id,

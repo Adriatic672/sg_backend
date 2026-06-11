@@ -189,8 +189,25 @@ class Accounts extends Model {
   }
 
   private normalizeFollowersCount(value: any): number {
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase().replace(/,/g, '');
+      const match = normalized.match(/^(\d+(?:\.\d+)?)([kmb])?$/);
+      if (match) {
+        const amount = Number(match[1]);
+        const suffix = match[2];
+        const multiplier = suffix === 'k'
+          ? 1_000
+          : suffix === 'm'
+            ? 1_000_000
+            : suffix === 'b'
+              ? 1_000_000_000
+              : 1;
+        return Number.isFinite(amount) ? Math.floor(amount * multiplier) : 0;
+      }
+    }
+
     const parsed = Number(value);
-    return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
+    return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 0;
   }
 
   async updateFollowersCount(socialUsername: string, site_id: any, userId: any, followersCount: number) {
@@ -1656,7 +1673,34 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
   }
 
    async userSocialSites(userId: string) {
-     const sites = await this.callQuerySafe(`select * from sm_site_users u INNER JOIN sm_sites s on u.site_id = s.site_id where user_id='${userId}'`);
+     let sites: any[] = await this.callQuerySafe(
+       `SELECT u.*, s.sm_name, s.logo
+        FROM sm_site_users u
+        INNER JOIN sm_sites s ON u.site_id = s.site_id
+        WHERE u.user_id = ?`,
+       [userId]
+     );
+
+     const sitesMissingFollowers = sites.filter((site: any) =>
+       this.normalizeFollowersCount(site.followers) === 0 && site.username
+     );
+
+     if (sitesMissingFollowers.length > 0) {
+       await Promise.allSettled(
+         sitesMissingFollowers.map((site: any) =>
+           this.updateFollowersCount(site.username, site.site_id, userId, 0)
+         )
+       );
+
+       sites = await this.callQuerySafe(
+         `SELECT u.*, s.sm_name, s.logo
+          FROM sm_site_users u
+          INNER JOIN sm_sites s ON u.site_id = s.site_id
+          WHERE u.user_id = ?`,
+         [userId]
+       );
+     }
+
      return this.makeResponse(200, "success", sites);
    }
 

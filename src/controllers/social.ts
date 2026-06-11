@@ -1,5 +1,6 @@
 import express, { Request, Response } from 'express';
 import SocialModel from '../models/social.model';
+import Accounts from '../models/accounts.model';
 import { JWTMiddleware } from '../helpers/jwt.middleware';
 
 const router = express.Router();
@@ -87,13 +88,34 @@ function renderOAuthCompletePage(message: string, redirectUrl?: string) {
 <script>
 var redirectUrl = ${JSON.stringify(redirectUrl)};
 function openApp() {
-  window.location.replace(redirectUrl);
+    // Try to open the app via custom scheme. If it fails, fallback to web URL after timeout.
+    try {
+        window.location = redirectUrl;
+    } catch (e) {
+        // ignore
+    }
 }
 document.getElementById('open-app').addEventListener('click', function(event) {
-  event.preventDefault();
-  openApp();
+    event.preventDefault();
+    openApp();
 });
 setTimeout(openApp, 400);
+
+// Fallback: if the app scheme didn't open after 1s, navigate to web fallback URL
+setTimeout(function() {
+    try {
+        // Construct web fallback by replacing scheme with https if possible
+        var webFallback = null;
+        try {
+            var u = new URL(redirectUrl);
+            if (u.protocol && u.protocol.indexOf('http') !== 0) {
+                // Replace scheme with https and keep host/path/query
+                webFallback = 'https://' + u.host + u.pathname + (u.search || '');
+            }
+        } catch (err) { /* ignore */ }
+        if (webFallback) window.location = webFallback;
+    } catch (e) { /* ignore */ }
+}, 1200);
 </script>
 ` : '';
     return `
@@ -169,25 +191,49 @@ async function handleOAuth2Redirect(req: Request, res: Response) {
         console.log('Completing OAuth redirect on backend');
         const result: any = await socialModel.completeOAuthRedirect(code as string, state as string);
         if (result?.status === 200) {
-            // Attempt to include immediate username and followers in the deep-link
-            // so mobile app can update UI without an extra refresh.
+            // Attempt immediate follower resync for X and include username/followers in deep link
             const payload = result.data || result?.data || result;
             let username = '';
             let followers = '';
+            let site_id = null;
+            let user_id = '';
             try {
                 if (payload && typeof payload === 'object') {
                     const record = payload.data || payload;
                     username = record?.username || record?.user_name || '';
                     followers = record?.followers !== undefined ? String(record.followers) : '';
+                    site_id = record?.site_id || record?.siteId || null;
+                    user_id = record?.user_id || record?.userId || '';
                 }
             } catch (e) {
                 // ignore
             }
 
+            // If this is X (site_id 1), trigger an immediate followers update to avoid zero counts
+            try {
+                if (site_id == 1 && username && user_id) {
+                    const accounts = new Accounts();
+                    // updateFollowersCount will fetch via RapidAPI and update DB
+                    await accounts.updateFollowersCount(username, site_id, user_id, 0);
+                }
+            } catch (resyncErr) {
+                console.error('Immediate resync failed:', resyncErr);
+            }
+
+            // Build redirect URL safely so params are encoded correctly
             const baseRedirect = appOAuthStatusRedirectUrl('success', state as string);
-            const redirectWithParams = baseRedirect +
-                (username ? `&username=${encodeURIComponent(username)}` : '') +
-                (followers ? `&followers=${encodeURIComponent(followers)}` : '');
+            let redirectWithParams = baseRedirect;
+            try {
+                const urlObj = new URL(baseRedirect);
+                const params = urlObj.searchParams;
+                if (username) params.set('username', username);
+                if (followers) params.set('followers', followers);
+                urlObj.search = params.toString();
+                redirectWithParams = urlObj.toString();
+            } catch (e) {
+                // fallback to appending encoded params
+                redirectWithParams = baseRedirect + (username ? `&username=${encodeURIComponent(username)}` : '') + (followers ? `&followers=${encodeURIComponent(followers)}` : '');
+            }
 
             setOAuthStatus(state as string, 'success', 'Connected successfully', result);
             return res.send(renderOAuthCompletePage(

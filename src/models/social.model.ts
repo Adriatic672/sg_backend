@@ -347,10 +347,7 @@ export default class SocialModel extends Model {
             try {
                 const forcePrompt = options?.forcePrompt === true || process.env.FORCE_X_PROMPT === 'true';
                 if (forcePrompt) {
-                    // OAuth spec: 'prompt=login' requests re-authentication; some providers accept provider-specific flags.
-                    finalUrl += `&prompt=login`;
-                    // Older endpoints sometimes accept force_login=true; include for compatibility.
-                    finalUrl += `&force_login=true`;
+                    finalUrl += `&prompt=consent`;
                 }
             } catch (e) {
                 // ignore

@@ -347,7 +347,7 @@ export default class SocialModel extends Model {
             try {
                 const forcePrompt = options?.forcePrompt === true || process.env.FORCE_X_PROMPT === 'true';
                 if (forcePrompt) {
-                    finalUrl += `&prompt=consent`;
+                    finalUrl += `&prompt=login`;
                 }
             } catch (e) {
                 // ignore

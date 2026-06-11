@@ -142,6 +142,7 @@ ${redirectScript}
 }
 
 router.get('/init/:platform', applyJWTConditionally, initSocial);
+router.post('/init/:platform', applyJWTConditionally, initSocial);
 router.post('/disconnect/:platform', applyJWTConditionally, disconnectSocial);
 router.post('/callback', applyJWTConditionally, socialCallback);
 router.get('/callback', socialCallbackGet);
@@ -329,12 +330,18 @@ async function socialCallbackGet(req: Request, res: Response) {
 
 async function initSocial(req: Request, res: Response) {
     try {
+        const userId = req.body?.userId || req.query?.userId || (req as any).user?.user_id;
+        const asBoolean = (value: unknown) => value === true || value === 'true' || value === '1';
+        const forcePrompt = asBoolean(req.body?.forcePrompt) || asBoolean(req.query?.forcePrompt);
+
         console.log('=== OAUTH INIT REQUEST ===');
+        console.log('Method:', req.method);
         console.log('Platform:', req.params.platform);
-        console.log('User ID:', req.body.userId);
+        console.log('User ID:', userId);
+        console.log('Force Prompt:', forcePrompt);
         console.log('==========================');
-        const forcePrompt = req.body?.forcePrompt === true || req.query?.forcePrompt === 'true';
-        const result = await socialModel.initSocial(req.params.platform, req.body.userId, { forcePrompt });
+
+        const result = await socialModel.initSocial(req.params.platform, userId, { forcePrompt });
         res.status(200).json(result);
     } catch (error: any) {
         res.status(500).json({ message: error.message });

@@ -1018,24 +1018,6 @@ export default class SocialModel extends Model {
             });
             username = profileResp.data.name || profileResp.data.given_name || '';
             linkedInUserId = profileResp.data.sub || '';
-
-            // Store connection in sm_site_users
-            const site: any = await this.getsiteByName('linkedin');
-            if (site && site.length > 0) {
-                const siteId = site[0].site_id;
-                await this.deleteData('sm_site_users', `user_id='${rec.userId}' AND site_id='${siteId}'`);
-                await this.insertData('sm_site_users', {
-                    user_id: rec.userId,
-                    site_id: siteId,
-                    username,
-                    followers: 0,
-                    is_verified: 'yes',
-                    link: `https://www.linkedin.com/in/${linkedInUserId}`,
-                    created_on: new Date(),
-                    last_synced_at: new Date(),
-                });
-                await this.updateData("users", `user_id='${rec.userId}'`, { is_social_verified: 'yes' });
-            }
         } catch (profileError) {
             console.log("LinkedIn profile fetch error", profileError);
         }

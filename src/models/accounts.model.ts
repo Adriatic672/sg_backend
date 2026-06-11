@@ -254,7 +254,7 @@ class Accounts extends Model {
       if (!token || !userId || !site_name) {
         return this.makeResponse(400, "Missing required fields: token or userId or site_name");
       }
-      const allowedSites = ['tiktok', 'instagram', 'X', 'facebook'];
+      const allowedSites = ['tiktok', 'instagram', 'X', 'facebook', 'linkedin'];
       if (!allowedSites.includes(site_name)) {
         return this.makeResponse(400, "Invalid site name");
       }
@@ -317,6 +317,20 @@ class Accounts extends Model {
             console.log("Facebook username fetch error:", fbError.message);
             socialUsername = `facebook_user_${userId.substring(0, 8)}`;
           }
+          break;
+        case 'linkedin':
+          try {
+            const lnResponse = await axios.get('https://api.linkedin.com/v2/userinfo', {
+              headers: { Authorization: `Bearer ${token}` },
+              timeout: 10000,
+            });
+            socialUsername = lnResponse.data?.name || lnResponse.data?.given_name || `linkedin_user_${userId.substring(0, 8)}`;
+            console.log("LinkedIn user:", socialUsername);
+          } catch (lnError: any) {
+            console.log("LinkedIn username fetch error:", lnError.message);
+            socialUsername = `linkedin_user_${userId.substring(0, 8)}`;
+          }
+          followersCount = 0;
           break;
         default:
           return this.makeResponse(400, "Invalid site name");

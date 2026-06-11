@@ -62,8 +62,8 @@ export class SocialVerifier {
           'user.fields': 'public_metrics,profile_image_url',
         },
       });
-
-      console.log('Twitter API v2 user data:', data);
+      // Debug log full response for troubleshooting follower count issues
+      console.log('Twitter API v2 user data (raw):', JSON.stringify(data));
       const user = data?.data;
       if (!user?.username) throw new Error('Invalid Twitter user data');
 

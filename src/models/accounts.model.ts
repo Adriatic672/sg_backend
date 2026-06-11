@@ -285,6 +285,21 @@ class Accounts extends Model {
           console.log("SocialVerifier::X", x);
           socialUsername = x.username;
           followersCount = x.followerCount || 0;
+          // If official verify returned 0 followers, try RapidAPI fallback to get followers
+          if ((!followersCount || followersCount === 0) && socialUsername) {
+            try {
+              const rapid = new RapiAPI();
+              const rapidInfo = await rapid.getUserInfo(socialUsername);
+              console.log('RapidAPI X fallback info:', rapidInfo);
+              const rapidFollowers = rapidInfo?.user?.followers_count || 0;
+              if (rapidFollowers && rapidFollowers > 0) {
+                followersCount = rapidFollowers;
+                console.log('Using RapidAPI follower count fallback for X:', followersCount);
+              }
+            } catch (fallbackErr) {
+              console.error('RapidAPI fallback for X failed:', fallbackErr);
+            }
+          }
           break;
         case 'facebook':
           // For Facebook, get username from Graph API

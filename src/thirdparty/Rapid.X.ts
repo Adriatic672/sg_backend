@@ -177,6 +177,10 @@ export default class RapiAPI {
       const response = await this.get('/graphql/UserByScreenName', { variables });
       const result = response.data?.data?.user?.result;
       const legacy = result?.legacy;
+      // Log raw response for debugging follower extraction
+      try {
+        console.log('Twitter getUserInfo raw response:', JSON.stringify(response.data));
+      } catch (e) { console.log('Twitter getUserInfo raw response (non-serializable)'); }
       console.log('Twitter getUserInfo response:', legacy);
       const followersCount = this.followerCountFromPayload(response.data);
       return {

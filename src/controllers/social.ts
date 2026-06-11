@@ -169,10 +169,30 @@ async function handleOAuth2Redirect(req: Request, res: Response) {
         console.log('Completing OAuth redirect on backend');
         const result: any = await socialModel.completeOAuthRedirect(code as string, state as string);
         if (result?.status === 200) {
+            // Attempt to include immediate username and followers in the deep-link
+            // so mobile app can update UI without an extra refresh.
+            const payload = result.data || result?.data || result;
+            let username = '';
+            let followers = '';
+            try {
+                if (payload && typeof payload === 'object') {
+                    const record = payload.data || payload;
+                    username = record?.username || record?.user_name || '';
+                    followers = record?.followers !== undefined ? String(record.followers) : '';
+                }
+            } catch (e) {
+                // ignore
+            }
+
+            const baseRedirect = appOAuthStatusRedirectUrl('success', state as string);
+            const redirectWithParams = baseRedirect +
+                (username ? `&username=${encodeURIComponent(username)}` : '') +
+                (followers ? `&followers=${encodeURIComponent(followers)}` : '');
+
             setOAuthStatus(state as string, 'success', 'Connected successfully', result);
             return res.send(renderOAuthCompletePage(
                 'Connected successfully.',
-                appOAuthStatusRedirectUrl('success', state as string)
+                redirectWithParams
             ));
         }
 

@@ -283,8 +283,8 @@ async function initSocial(req: Request, res: Response) {
         console.log('Platform:', req.params.platform);
         console.log('User ID:', req.body.userId);
         console.log('==========================');
-        
-        const result = await socialModel.initSocial(req.params.platform, req.body.userId);
+        const forcePrompt = req.body?.forcePrompt === true || req.query?.forcePrompt === 'true';
+        const result = await socialModel.initSocial(req.params.platform, req.body.userId, { forcePrompt });
         res.status(200).json(result);
     } catch (error: any) {
         res.status(500).json({ message: error.message });

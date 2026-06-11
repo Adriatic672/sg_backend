@@ -82,12 +82,12 @@ export default class SocialModel extends Model {
         });
     }
 
-    async initSocial(platform: string, userId: string) {
+    async initSocial(platform: string, userId: string, options?: { forcePrompt?: boolean }) {
         switch (platform) {
             case 'tiktok':
                 return this.initTikTokAuth(userId);
             case 'x':
-                return this.initXAuth(userId);
+                return this.initXAuth(userId, options);
             case 'instagram':
                 return this.initInstagramAuth(userId);
             case 'facebook':
@@ -321,7 +321,7 @@ export default class SocialModel extends Model {
         }
     }
 
-    async initXAuth(userId: string) {
+    async initXAuth(userId: string, options?: { forcePrompt?: boolean }) {
         try {
             const config = this.platforms.get('x')!;
             if (!config.clientKey) {
@@ -342,8 +342,23 @@ export default class SocialModel extends Model {
                 `&state=${encodeURIComponent(state)}` +
                 `&code_challenge=${encodeURIComponent(codeChallenge)}` +
                 `&code_challenge_method=S256`;
+            // Optionally force account selection / re-login for testing or multi-account flows
+            let finalUrl = url;
+            try {
+                const forcePrompt = options?.forcePrompt === true || process.env.FORCE_X_PROMPT === 'true';
+                if (forcePrompt) {
+                    // OAuth spec: 'prompt=login' requests re-authentication; some providers accept provider-specific flags.
+                    finalUrl += `&prompt=login`;
+                    // Older endpoints sometimes accept force_login=true; include for compatibility.
+                    finalUrl += `&force_login=true`;
+                }
+            } catch (e) {
+                // ignore
+            }
 
-            return this.makeResponse(200, "success", { authUrl: url, state });
+            console.log('X Auth URL:', finalUrl ? finalUrl.substring(0, 200) + '...' : finalUrl);
+
+            return this.makeResponse(200, "success", { authUrl: finalUrl, state });
         } catch (error) {
             return this.makeResponse(500, `Failed to initialize X auth: ${error}`);
         }

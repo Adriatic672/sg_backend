@@ -120,7 +120,22 @@ export default class SocialModel extends Model {
                 `&code_challenge=${encodeURIComponent(codeChallenge)}` +
                 `&code_challenge_method=S256`;
 
-            return this.makeResponse(200, "success", { authUrl: url, state });
+                // If FORCE_TIKTOK_PROMPT is set, append a provider-specific param to encourage showing the consent page.
+                // This is optional and controlled by env to avoid unexpected provider behavior in production.
+                let finalUrl = url;
+                try {
+                    if (process.env.FORCE_TIKTOK_PROMPT === 'true') {
+                        // TikTok may ignore unknown params; using an explicit param helps in some flows or proxies.
+                        finalUrl += `&force_verify=1`;
+                    }
+                } catch (e) {
+                    // ignore
+                }
+
+                // Log the full auth URL for debugging (avoid logging in production with secrets)
+                console.log('TikTok Auth URL:', finalUrl);
+
+                return this.makeResponse(200, "success", { authUrl: finalUrl, state });
         } catch (error) {
             return this.makeResponse(500, `Failed to initialize TikTok auth: ${error}`);
         }

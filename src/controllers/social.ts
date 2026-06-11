@@ -186,7 +186,7 @@ async function handleOAuth2Redirect(req: Request, res: Response) {
 
         const platform = await socialModel.getOAuthPlatformForState(state as string);
         // Allow backend to complete OAuth for X and TikTok; other platforms redirect back to the app
-        if (platform && platform !== 'x' && platform !== 'tiktok') {
+        if (platform && platform !== 'x' && platform !== 'tiktok' && platform !== 'linkedin') {
             return res.send(renderAppRedirectPage(
                 'Completing login...',
                 appOAuthRedirectUrl(`code=${encodeURIComponent(code as string)}&state=${encodeURIComponent(state as string)}`)

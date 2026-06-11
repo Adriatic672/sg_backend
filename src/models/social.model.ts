@@ -921,6 +921,36 @@ export default class SocialModel extends Model {
         return this.callQuerySafe(`select * from sm_sites where lower(sm_name)=?`, [name.toLowerCase()]);
     }
 
+    // Expose platform config for debugging (masked client key)
+    public getPlatformConfig(platform: string) {
+        const config = this.platforms.get(platform as string);
+        if (!config) return null;
+        const maskedKey = config.clientKey ? (config.clientKey.length > 8 ? config.clientKey.substring(0, 8) + '...' : config.clientKey) : null;
+        return {
+            name: config.name,
+            clientKey: maskedKey,
+            redirectUri: config.redirectUri
+        };
+    }
+
+    public async getRecentSocialTokens(platform: string, limit: number = 5) {
+        try {
+            const rows: any = await this.callParameterizedQuery(
+                `SELECT platform, userId, username, access_token, created_at FROM social_tokens WHERE platform = ? ORDER BY created_at DESC LIMIT ?`,
+                [platform, limit]
+            );
+            return rows.map((r: any) => ({
+                platform: r.platform,
+                userId: r.userId,
+                username: r.username || null,
+                access_token: r.access_token ? (String(r.access_token).substring(0, 6) + '...') : null,
+                created_at: r.created_at
+            }));
+        } catch (e) {
+            return [];
+        }
+    }
+
     private async removeSocialTokens(platform: string, accessToken: string, userId: string) {
         await this.deleteData("social_tokens", `platform='${platform}' AND access_token='${accessToken}'`);
         const site: any = await this.getsiteByName(platform);

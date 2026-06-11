@@ -151,6 +151,10 @@ router.get('/status/:state', applyJWTConditionally, oauthStatus);
 // New route for Instagram username connection (RapidAPI)
 router.post('/connect-instagram', applyJWTConditionally, connectInstagramUsername);
 
+// Debug endpoints (no auth) for quick checks
+router.get('/debug/x/config', debugXConfig);
+router.get('/debug/x/tokens', debugXTokens);
+
 async function handleOAuth2Redirect(req: Request, res: Response) {
     try {
         console.log('=== OAUTH2REDIRECT GET ===');
@@ -391,6 +395,27 @@ async function initInstagramAuth(req: Request, res: Response) {
         res.status(200).json(result);
     } catch (error: any) {
         res.status(500).json({ message: error.message });
+    }
+}
+
+async function debugXConfig(req: Request, res: Response) {
+    try {
+        const cfg = await socialModel.getPlatformConfig('x');
+        return res.status(200).json({ status: 200, data: cfg });
+    } catch (err: any) {
+        console.error('debugXConfig error', err);
+        return res.status(500).json({ status: 500, message: err.message });
+    }
+}
+
+async function debugXTokens(req: Request, res: Response) {
+    try {
+        const limit = Number(req.query.limit || 5);
+        const tokens = await socialModel.getRecentSocialTokens('x', limit);
+        return res.status(200).json({ status: 200, data: tokens });
+    } catch (err: any) {
+        console.error('debugXTokens error', err);
+        return res.status(500).json({ status: 500, message: err.message });
     }
 }
 

@@ -3,7 +3,7 @@ import { google } from 'googleapis'; // To handle OAuth2 authentication
 import fs from 'fs';
 
 // Firebase project configuration
-const FCM_ENDPOINT: string = process.env.FCM_ENDPOINT || "https://fcm.googleapis.com/v1/projects/app-social-gems/messages:send";
+const FCM_ENDPOINT: string = process.env.FCM_ENDPOINT || "https://fcm.googleapis.com/v1/projects/socialgems-30998/messages:send";
 const GOOGLE_CREDENTIALS_PATH = './firebase.json';
 
 // Function to get OAuth2 access token

@@ -5,6 +5,8 @@ import Stripe from 'stripe';
 import { logger } from '../utils/logger';
 import { setUserTier } from '../helpers/subscriptionTier';
 
+const mysqlNow = () => mysqlNow().replace('T', ' ').replace('Z', '').slice(0, 19);
+
 let _stripe: Stripe | null = null;
 function getStripe(): Stripe {
   if (!_stripe) {
@@ -94,7 +96,7 @@ export default class Payments extends Model {
         `user_id='${userId}' AND subscription_id=${subInfo[0].id}`
       );
 
-      const startDate = new Date().toISOString().split("T")[0];
+      const startDate = mysqlNow().split("T")[0];
 
       if (existingSubscription.length > 0) {
         // Update the existing subscription record
@@ -105,7 +107,7 @@ export default class Payments extends Model {
             status: "inactive",
             start_date: startDate,
             auto_renew: 1,
-            updated_at: new Date().toISOString(),
+            updated_at: mysqlNow(),
           }
         );
       } else {
@@ -116,7 +118,7 @@ export default class Payments extends Model {
           status: "inactive",
           start_date: startDate,
           auto_renew: 1,
-          created_at: new Date().toISOString(),
+          created_at: mysqlNow(),
         };
 
         await this.insertData("user_subscriptions", newSubscription);
@@ -192,7 +194,7 @@ export default class Payments extends Model {
                 await this.updateData(
                   "user_subscriptions",
                   `user_id='${userId}' AND subscription_id=${subInfo[0].id}`,
-                  { status: "active", updated_at: new Date().toISOString() }
+                  { status: "active", updated_at: mysqlNow() }
                 );
               }
               await setUserTier(userId, tier);

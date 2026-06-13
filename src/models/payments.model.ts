@@ -5,7 +5,7 @@ import Stripe from 'stripe';
 import { logger } from '../utils/logger';
 import { setUserTier } from '../helpers/subscriptionTier';
 
-const mysqlNow = () => mysqlNow().replace('T', ' ').replace('Z', '').slice(0, 19);
+const mysqlNow = (): string => new Date().toISOString().replace('T', ' ').replace('Z', '').slice(0, 19);
 
 let _stripe: Stripe | null = null;
 function getStripe(): Stripe {
@@ -39,7 +39,7 @@ export default class Payments extends Model {
   }
   async createSubscription(data: any) {
     try {
-      const { sub_tag, userId, successUrl, cancelUrl } = data;
+      const { sub_tag, userId, successUrl, cancelUrl, payment_method } = data;
 
       // Retrieve subscription plan info
       const subInfo: any = await this.selectDataQuery(
@@ -50,8 +50,6 @@ export default class Payments extends Model {
         return this.makeResponse(400, "Invalid subscription plan");
       }
 
-      const priceId = subInfo[0].stripe_price_tag;
-
       // Retrieve user info
       const userInfo = await this.selectDataQuery(
         "users",
@@ -60,6 +58,95 @@ export default class Payments extends Model {
       if (userInfo.length === 0) {
         return this.makeResponse(400, "User not found");
       }
+
+      const startDate = new Date().toISOString().split("T")[0];
+      const tier = sub_tag.toUpperCase() === 'CREATOR_PRO' ? 'pro'
+                 : sub_tag.toUpperCase() === 'CREATOR_PLUS' ? 'plus'
+                 : null;
+
+      // ── Wallet payment path ──────────────────────────────────────────────────
+      if (payment_method === 'wallet') {
+        const planPrice = parseFloat(subInfo[0].price);
+
+        // Get user's KES wallet
+        const walletRows: any = await this.selectDataQuery(
+          'user_wallets',
+          `user_id='${userId}' AND asset='KES' AND status='active'`
+        );
+        if (walletRows.length === 0) {
+          return this.makeResponse(400, 'No active KES wallet found. Please fund your wallet first.');
+        }
+        const wallet = walletRows[0];
+        const available = parseFloat(wallet.balance_available ?? wallet.available_balance ?? 0);
+
+        if (available < planPrice) {
+          return this.makeResponse(400, `Insufficient wallet balance. You have KES ${available.toFixed(2)} but need KES ${planPrice.toFixed(2)}.`);
+        }
+
+        // Deduct from wallet
+        const newBalance = parseFloat(wallet.balance) - planPrice;
+        const newAvailable = available - planPrice;
+        const newWithdrawn = parseFloat(wallet.total_withdrawn ?? 0) + planPrice;
+        await this.updateData(
+          'user_wallets',
+          `wallet_id='${wallet.wallet_id}'`,
+          {
+            balance: newBalance.toFixed(2),
+            balance_available: newAvailable.toFixed(2),
+            total_withdrawn: newWithdrawn.toFixed(2),
+          }
+        );
+
+        // Record transaction
+        const transId = 't' + Date.now().toString(16) + Math.random().toString(16).slice(2, 10);
+        await this.insertData('wl_transactions', {
+          trans_id: transId,
+          user_id: userId,
+          dr_wallet_id: wallet.wallet_id,
+          cr_wallet_id: '0X00000000001',
+          trans_type: 'DR',
+          op_type: 'SUBSCRIPTION',
+          status: 'SUCCESS',
+          system_status: 'SUCCESS',
+          currency: 'KES',
+          asset: 'KES',
+          amount: planPrice.toFixed(2),
+          running_balance: newBalance.toFixed(2),
+          fee: '0.00',
+          narration: `${sub_tag} subscription`,
+          payment_method: 'wallet',
+          created_on: mysqlNow(),
+        });
+
+        // Activate subscription immediately
+        const existingSub: any = await this.selectDataQuery(
+          'user_subscriptions',
+          `user_id='${userId}' AND subscription_id=${subInfo[0].id}`
+        );
+        if (existingSub.length > 0) {
+          await this.updateData(
+            'user_subscriptions',
+            `user_id='${userId}' AND subscription_id=${subInfo[0].id}`,
+            { status: 'active', start_date: startDate, auto_renew: 1, updated_at: mysqlNow() }
+          );
+        } else {
+          await this.insertData('user_subscriptions', {
+            user_id: userId,
+            subscription_id: subInfo[0].id,
+            status: 'active',
+            start_date: startDate,
+            auto_renew: 1,
+            created_at: mysqlNow(),
+          });
+        }
+
+        if (tier) await setUserTier(userId, tier);
+
+        return this.makeResponse(200, 'Subscription activated successfully');
+      }
+
+      // ── Stripe / M-Pesa path ─────────────────────────────────────────────────
+      const priceId = subInfo[0].stripe_price_tag;
       const email = userInfo[0].email;
 
       // Create Stripe customer if not already created
@@ -67,8 +154,6 @@ export default class Payments extends Model {
       if (!customerId) {
         const customer = await stripe.customers.create({ email });
         customerId = customer.id;
-
-        // Update user with Stripe customer ID
         await this.updateData(
           "users",
           `user_id='${userId}'`,
@@ -80,12 +165,7 @@ export default class Payments extends Model {
       const session = await stripe.checkout.sessions.create({
         customer: customerId,
         mode: "subscription",
-        line_items: [
-          {
-            price: priceId,
-            quantity: 1,
-          },
-        ],
+        line_items: [{ price: priceId, quantity: 1 }],
         success_url: `${successUrl}?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: cancelUrl,
       });
@@ -96,32 +176,21 @@ export default class Payments extends Model {
         `user_id='${userId}' AND subscription_id=${subInfo[0].id}`
       );
 
-      const startDate = mysqlNow().split("T")[0];
-
       if (existingSubscription.length > 0) {
-        // Update the existing subscription record
         await this.updateData(
           "user_subscriptions",
           `user_id='${userId}' AND subscription_id=${subInfo[0].id}`,
-          {
-            status: "inactive",
-            start_date: startDate,
-            auto_renew: 1,
-            updated_at: mysqlNow(),
-          }
+          { status: "inactive", start_date: startDate, auto_renew: 1, updated_at: mysqlNow() }
         );
       } else {
-        // Insert a new subscription record
-        const newSubscription = {
+        await this.insertData("user_subscriptions", {
           user_id: userId,
           subscription_id: subInfo[0].id,
           status: "inactive",
           start_date: startDate,
           auto_renew: 1,
           created_at: mysqlNow(),
-        };
-
-        await this.insertData("user_subscriptions", newSubscription);
+        });
       }
 
       return this.makeResponse(200, "Checkout session created successfully", {

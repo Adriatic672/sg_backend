@@ -42,6 +42,11 @@ router.post('/payout', applyJWTConditionally, payout);
 
 
 
+// Affiliate member flow
+router.post('/join-affiliate', applyJWTConditionally, joinAffiliateCampaign);
+router.get('/my-affiliates', applyJWTConditionally, getMyAffiliates);
+router.get('/affiliate-redirect/:refCode', affiliateRedirect);
+
 // Influencer actions
 router.get('/explore', applyJWTConditionally, exploreCampaigns);
 router.post('/affiliate-click', applyJWTConditionally, trackAffiliateClick);
@@ -476,6 +481,43 @@ async function receivedInvites(req: Request, res: Response) {
     res.status(200).json(result);
   } catch (error) {
      res.status(500).json({ message: 'Error retrieving pending campaigns', error });
+  }
+}
+
+async function joinAffiliateCampaign(req: Request, res: Response) {
+  try {
+    const userId = (req as any).user?.userId || (req as any).user?.user_id || req.body.userId;
+    const { campaignId } = req.body;
+    if (!campaignId) return res.status(400).json({ message: 'campaignId required' });
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    const result = await campaign.joinAffiliateCampaign(campaignId, userId, baseUrl);
+    res.status(result.status).json(result);
+  } catch (error) {
+    res.status(500).json({ message: 'Error joining affiliate campaign', error });
+  }
+}
+
+async function getMyAffiliates(req: Request, res: Response) {
+  try {
+    const userId = (req as any).user?.userId || (req as any).user?.user_id || req.body.userId;
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    const result = await campaign.getMyAffiliates(userId, baseUrl);
+    res.status(result.status).json(result);
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching affiliates', error });
+  }
+}
+
+async function affiliateRedirect(req: Request, res: Response) {
+  try {
+    const { refCode } = req.params;
+    const result = await campaign.trackAffiliateRedirect(refCode);
+    if (result.status !== 200) return res.status(404).send('Invalid affiliate link');
+    const affiliateLink = (result as any).data?.affiliate_link;
+    if (!affiliateLink) return res.status(404).send('Affiliate link not configured');
+    res.redirect(affiliateLink);
+  } catch (error) {
+    res.status(500).json({ message: 'Error processing redirect', error });
   }
 }
 

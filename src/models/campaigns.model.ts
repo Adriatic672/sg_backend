@@ -816,25 +816,33 @@ export default class Campaigns extends Model {
       `);
 
       const totalEarnings: any = await this.callQuerySafe(`
-        SELECT SUM(amount_paid) AS total
+        SELECT currency, SUM(amount_paid) AS total
         FROM campaign_payments_users
         WHERE user_id = '${userId}' AND trans_status = 'SUCCESS'
+        GROUP BY currency
       `);
 
       const jobBoardEarnings: any = await this.callQuerySafe(`
-        SELECT SUM(amount) AS total
+        SELECT asset AS currency, SUM(amount) AS total
         FROM wl_transactions
         WHERE user_id = '${userId}' AND trans_type = 'CR'
         AND system_status = 'SUCCESS' AND op_type = 'JOB_PAYMENT'
+        GROUP BY asset
       `);
 
-      const totalEarningsAmount = (parseFloat(totalEarnings[0]?.total) || 0)
-        + (parseFloat(jobBoardEarnings[0]?.total) || 0);
+      // Sum per currency across both sources
+      const earningsByCurrency: Record<string, number> = {};
+      for (const row of [...totalEarnings, ...jobBoardEarnings]) {
+        const cur = (row.currency || 'KES').toUpperCase();
+        earningsByCurrency[cur] = (earningsByCurrency[cur] || 0) + (parseFloat(row.total) || 0);
+      }
 
       return this.makeResponse(200, "success", {
         completed_campaigns: completedCampaigns[0]?.count || 0,
         pending_campaigns: pendingCampaigns[0]?.count || 0,
-        total_earnings: totalEarningsAmount
+        total_earnings: earningsByCurrency['KES'] || 0,
+        total_earnings_usd: earningsByCurrency['USD'] || 0,
+        earnings_by_currency: earningsByCurrency,
       });
     } catch (error) {
       console.error("Error in influencerStats:", error);
@@ -967,10 +975,13 @@ WHERE i.user_id = '${userId}' AND i.invite_status = '${status}' AND i.applicatio
         CASE WHEN i.invite_id IS NOT NULL THEN 1 ELSE 0 END AS is_invited,
         i.invite_status, i.action_status,
         i.application_status,
-        i.delay_flagged, i.delay_flagged_at
+        i.delay_flagged, i.delay_flagged_at,
+        CASE WHEN cam.id IS NOT NULL THEN 1 ELSE 0 END AS has_joined,
+        cam.ref_code AS my_ref_code
       FROM act_campaigns c
       INNER JOIN business_profile p ON c.created_by = p.business_id
       LEFT JOIN act_campaign_invites i ON c.campaign_id = i.campaign_id AND i.user_id = '${userId}'
+      LEFT JOIN campaign_affiliate_members cam ON c.campaign_id = cam.campaign_id AND cam.user_id = '${userId}'
       WHERE c.status IN ('active', 'open_to_applications')
       ${earningFilter}
       ${earlyAccessFilter}
@@ -2130,7 +2141,8 @@ WHERE campaign_id = '${campaign_id}'`);
 
       logger.info(`createCampaign`, data)
       console.log("createCampaignByUser", data)
-      const { title, role, userId, agentId, staffId, campaign_image, number_of_influencers, description, objective, requestId, start_date, end_date, budget, tasks, earning_type, affiliate_link } = data;
+      const { title, role, userId, agentId, staffId, campaign_image, number_of_influencers, description, objective, requestId, start_date, end_date, budget, tasks, earning_type, affiliate_link, commission_type, commission_value } = data;
+      const isAffiliate = (earning_type || '').toLowerCase() === 'affiliate';
       const campaign_id = "cp" + this.getRandomString();
 
       if (!tasks || tasks.length === 0) {
@@ -2207,11 +2219,9 @@ WHERE campaign_id = '${campaign_id}'`);
       let creation_fee = fees[0].creation_fee;
       console.log("creation_fee", creation_fee)
 
-      if (creation_fee_type.toUpperCase() == "PERCENTAGE") {
+      if (!isAffiliate && creation_fee_type.toUpperCase() == "PERCENTAGE") {
         creation_fee = (creation_fee / 100) * budget;
       }
-
-
 
       // Check if start date is in the future
       const today = new Date().toISOString().slice(0, 10);
@@ -2238,10 +2248,18 @@ WHERE campaign_id = '${campaign_id}'`);
         return this.makeResponse(400, "Campaign end date must be at least 1 day after start date");
       }
 
-      const totalCampaignCost = budget - creation_fee;
+      if (!isAffiliate) {
+        const totalCampaignCost = budget - creation_fee;
+        if ((totalCampaignCost / number_of_influencers) < min_amount) {
+          return this.makeResponse(400, `Minimum payout per influencer should be atleast ${min_amount} USD, therefore increase your budget or reduce the number of influencers you intend to invite`);
+        }
+      }
 
-      if ((totalCampaignCost / number_of_influencers) < min_amount) {
-        return this.makeResponse(400, `Minimum payout per influencer should be atleast ${min_amount} USD, therefore increase your budget or reduce the number of influencers you intend to invite`);
+      if (isAffiliate && !commission_type) {
+        return this.makeResponse(400, "Please specify a commission type (percentage or fixed) for affiliate campaigns");
+      }
+      if (isAffiliate && (commission_value == null || isNaN(parseFloat(commission_value)) || parseFloat(commission_value) <= 0)) {
+        return this.makeResponse(400, "Please specify a valid commission value for affiliate campaigns");
       }
 
 
@@ -2294,6 +2312,8 @@ WHERE campaign_id = '${campaign_id}'`);
         created_by: finalBusinessId
       };
       if (affiliate_link) newCampaign.affiliate_link = affiliate_link;
+      if (isAffiliate && commission_type) newCampaign.commission_type = commission_type;
+      if (isAffiliate && commission_value) newCampaign.commission_value = parseFloat(commission_value);
 
       this.beginTransaction()
       await this.insertData("act_campaigns", newCampaign);
@@ -3660,6 +3680,99 @@ WHERE campaign_id = '${campaign_id}'`);
     } catch (error) {
       console.error("Error in validateTaskPeriod:", error);
       return this.makeResponse(500, "Error validating task period");
+    }
+  }
+
+  // =====================================
+  // AFFILIATE MEMBER FLOW
+  // =====================================
+
+  async joinAffiliateCampaign(campaignId: string, userId: string, baseUrl: string) {
+    try {
+      const campaigns: any[] = await this.callQuerySafe(`
+        SELECT affiliate_link, earning_type, title FROM act_campaigns
+        WHERE campaign_id = '${campaignId}' AND status IN ('active', 'open_to_applications')
+        LIMIT 1
+      `);
+      if (!campaigns.length) return this.makeResponse(404, 'Campaign not found or no longer active');
+      const camp = campaigns[0];
+      if ((camp.earning_type || '').toLowerCase() !== 'affiliate') {
+        return this.makeResponse(400, 'This is not an affiliate campaign');
+      }
+
+      const existing: any[] = await this.callQuerySafe(`
+        SELECT ref_code FROM campaign_affiliate_members
+        WHERE campaign_id = '${campaignId}' AND user_id = '${userId}'
+        LIMIT 1
+      `);
+      if (existing.length) {
+        const trackingUrl = `${baseUrl}/campaigns/affiliate-redirect/${existing[0].ref_code}`;
+        return this.makeResponse(200, 'Already joined', {
+          ref_code: existing[0].ref_code,
+          tracking_url: trackingUrl,
+          affiliate_link: camp.affiliate_link,
+        });
+      }
+
+      const refCode = crypto.randomBytes(6).toString('hex');
+      await this.insertData(
+        'INSERT INTO campaign_affiliate_members (campaign_id, user_id, ref_code) VALUES (?, ?, ?)',
+        [campaignId, userId, refCode]
+      );
+      const trackingUrl = `${baseUrl}/campaigns/affiliate-redirect/${refCode}`;
+      return this.makeResponse(200, 'Joined successfully', {
+        ref_code: refCode,
+        tracking_url: trackingUrl,
+        affiliate_link: camp.affiliate_link,
+      });
+    } catch (error) {
+      console.error('Error in joinAffiliateCampaign:', error);
+      return this.makeResponse(500, 'Error joining affiliate campaign');
+    }
+  }
+
+  async getMyAffiliates(userId: string, baseUrl: string) {
+    try {
+      const results: any[] = await this.callQuerySafe(`
+        SELECT
+          m.campaign_id, m.ref_code, m.click_count, m.joined_at,
+          c.title, c.description, c.image_urls, c.affiliate_link,
+          c.commission_type, c.commission_value, c.status,
+          p.name AS brand_name, p.logo AS brand_logo
+        FROM campaign_affiliate_members m
+        INNER JOIN act_campaigns c ON m.campaign_id = c.campaign_id
+        INNER JOIN business_profile p ON c.created_by = p.business_id
+        WHERE m.user_id = '${userId}'
+        ORDER BY m.joined_at DESC
+      `);
+      const data = results.map(r => ({
+        ...r,
+        tracking_url: `${baseUrl}/campaigns/affiliate-redirect/${r.ref_code}`,
+      }));
+      return this.makeResponse(200, 'success', data);
+    } catch (error) {
+      console.error('Error in getMyAffiliates:', error);
+      return this.makeResponse(500, 'Error fetching your affiliate programs');
+    }
+  }
+
+  async trackAffiliateRedirect(refCode: string) {
+    try {
+      const members: any[] = await this.callQuerySafe(`
+        SELECT m.ref_code, c.affiliate_link
+        FROM campaign_affiliate_members m
+        INNER JOIN act_campaigns c ON m.campaign_id = c.campaign_id
+        WHERE m.ref_code = '${refCode}'
+        LIMIT 1
+      `);
+      if (!members.length) return this.makeResponse(404, 'Invalid tracking link');
+      await this.callQuerySafe(
+        `UPDATE campaign_affiliate_members SET click_count = click_count + 1 WHERE ref_code = '${refCode}'`
+      );
+      return this.makeResponse(200, 'success', { affiliate_link: members[0].affiliate_link });
+    } catch (error) {
+      console.error('Error in trackAffiliateRedirect:', error);
+      return this.makeResponse(500, 'Error processing redirect');
     }
   }
 }

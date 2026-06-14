@@ -60,6 +60,8 @@ export default class Payments extends Model {
       }
 
       const startDate = new Date().toISOString().split("T")[0];
+      const endDateObj = new Date(); endDateObj.setDate(endDateObj.getDate() + 30);
+      const endDate = endDateObj.toISOString().split("T")[0];
       const tier = sub_tag.toUpperCase() === 'CREATOR_PRO' ? 'pro'
                  : sub_tag.toUpperCase() === 'CREATOR_PLUS' ? 'plus'
                  : null;
@@ -127,7 +129,7 @@ export default class Payments extends Model {
           await this.updateData(
             'user_subscriptions',
             `user_id='${userId}' AND subscription_id=${subInfo[0].id}`,
-            { status: 'active', start_date: startDate, auto_renew: 1, updated_at: mysqlNow() }
+            { status: 'active', start_date: startDate, end_date: endDate, auto_renew: 1, updated_at: mysqlNow() }
           );
         } else {
           await this.insertData('user_subscriptions', {
@@ -135,6 +137,7 @@ export default class Payments extends Model {
             subscription_id: subInfo[0].id,
             status: 'active',
             start_date: startDate,
+            end_date: endDate,
             auto_renew: 1,
             created_at: mysqlNow(),
           });
@@ -180,7 +183,7 @@ export default class Payments extends Model {
         await this.updateData(
           "user_subscriptions",
           `user_id='${userId}' AND subscription_id=${subInfo[0].id}`,
-          { status: "inactive", start_date: startDate, auto_renew: 1, updated_at: mysqlNow() }
+          { status: "inactive", start_date: startDate, end_date: endDate, auto_renew: 1, updated_at: mysqlNow() }
         );
       } else {
         await this.insertData("user_subscriptions", {
@@ -188,6 +191,7 @@ export default class Payments extends Model {
           subscription_id: subInfo[0].id,
           status: "inactive",
           start_date: startDate,
+          end_date: endDate,
           auto_renew: 1,
           created_at: mysqlNow(),
         });

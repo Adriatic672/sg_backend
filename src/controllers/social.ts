@@ -152,6 +152,9 @@ router.get('/status/:state', applyJWTConditionally, oauthStatus);
 // New route for Instagram username connection (RapidAPI)
 router.post('/connect-instagram', applyJWTConditionally, connectInstagramUsername);
 
+// Fallback route for Facebook page URL connection (RapidAPI scraper)
+router.post('/connect-facebook', applyJWTConditionally, connectFacebookWithPageUrl);
+
 // Debug endpoints (no auth) for quick checks
 router.get('/debug/x/config', debugXConfig);
 router.get('/debug/x/tokens', debugXTokens);
@@ -429,6 +432,20 @@ async function connectInstagramUsername(req: Request, res: Response) {
     }
 }
 
- 
+async function connectFacebookWithPageUrl(req: Request, res: Response) {
+    try {
+        const userId = req.body.userId || req.query.userId;
+        const pageUrl = req.body.pageUrl || req.body.username;
+
+        if (!pageUrl) {
+            return res.status(400).json({ message: 'Page URL is required' });
+        }
+
+        const result = await socialModel.connectFacebookWithPageUrl(userId, pageUrl);
+        res.status(200).json(result);
+    } catch (error: any) {
+        res.status(500).json({ message: error.message });
+    }
+}
 
 export default router;

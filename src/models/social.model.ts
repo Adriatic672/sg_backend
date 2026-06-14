@@ -554,30 +554,101 @@ export default class SocialModel extends Model {
     async initFacebookAuth(userId: string) {
         try {
             const config = this.platforms.get('facebook')!;
-            if (!config.clientKey || !config.clientSecret) {
-                return this.makeResponse(500, "Facebook OAuth is not configured. Set FACEBOOK_CLIENT_ID and FACEBOOK_CLIENT_SECRET.");
+
+            // When Meta app is verified, set FACEBOOK_OAUTH_ENABLED=true to switch to OAuth flow.
+            // Until then, fall back to the page-URL / RapidAPI method.
+            const oauthEnabled = process.env.FACEBOOK_OAUTH_ENABLED === 'true';
+
+            if (oauthEnabled && config.clientKey && config.clientSecret) {
+                const scopes = ['public_profile', 'email'];
+                const state = this.generateState();
+                await this.saveOAuthState('facebook', state, userId, '');
+
+                const url =
+                    `${config.authUrl}?client_id=${config.clientKey}` +
+                    `&response_type=code` +
+                    `&scope=${encodeURIComponent(scopes.join(','))}` +
+                    `&redirect_uri=${encodeURIComponent(config.redirectUri)}` +
+                    `&state=${encodeURIComponent(state)}`;
+
+                console.log('=== FACEBOOK AUTH URL ===');
+                console.log('Redirect URI:', config.redirectUri);
+                console.log('Full Auth URL:', url);
+                console.log('========================');
+
+                return this.makeResponse(200, "success", { authUrl: url, method: 'oauth' });
             }
-            // Use basic scopes that don't require app review for local testing
-            // For production with Pages features, you'll need app review approval
-            const scopes = ['public_profile', 'email'];
-            const state = this.generateState();
-            await this.saveOAuthState('facebook', state, userId, '');
 
-            const url =
-                `${config.authUrl}?client_id=${config.clientKey}` +
-                `&response_type=code` +
-                `&scope=${encodeURIComponent(scopes.join(','))}` +
-                `&redirect_uri=${encodeURIComponent(config.redirectUri)}` +
-                `&state=${encodeURIComponent(state)}`;
-
-            console.log('=== FACEBOOK AUTH URL ===');
-            console.log('Redirect URI:', config.redirectUri);
-            console.log('Full Auth URL:', url);
-            console.log('========================');
-
-            return this.makeResponse(200, "success", { authUrl: url });
+            // Fallback: ask user for their Facebook page URL
+            console.log('Facebook Auth: OAuth not enabled, using page URL fallback');
+            return this.makeResponse(200, "success", {
+                authUrl: null,
+                method: 'page_url',
+                message: 'Please enter your Facebook Page URL to connect',
+            });
         } catch (error) {
             return this.makeResponse(500, `Failed to initialize Facebook auth: ${error}`);
+        }
+    }
+
+    async connectFacebookWithPageUrl(userId: string, pageUrl: string) {
+        try {
+            const FacebookAPI = require('../thirdparty/Facebook').default;
+            const facebookAPI = new FacebookAPI();
+
+            // Normalise — accept "MyPage", "facebook.com/MyPage", or full URL
+            pageUrl = String(pageUrl || '').trim();
+            if (!pageUrl) return this.makeResponse(400, "Page URL is required");
+            if (!pageUrl.startsWith('http')) {
+                const slug = pageUrl.replace(/^(www\.)?(facebook\.com\/)?/, '');
+                pageUrl = `https://facebook.com/${slug}`;
+            }
+
+            console.log('Connecting Facebook page:', pageUrl);
+
+            const followersCount = await facebookAPI.getFollowers(pageUrl);
+            console.log('Facebook followers:', followersCount);
+
+            const slug = pageUrl.replace(/^https?:\/\/(www\.)?facebook\.com\//, '').replace(/\/$/, '');
+
+            const tokenData = {
+                access_token: pageUrl,
+                username: slug,
+                page_url: pageUrl,
+                followers_count: followersCount,
+                platform: 'facebook',
+                connected_at: new Date().toISOString(),
+            };
+
+            const existingSite: any = await this.getsiteByName('facebook');
+            if (existingSite && existingSite.length > 0) {
+                const siteId = existingSite[0].site_id;
+                await this.deleteData('sm_site_users', `user_id='${userId}' AND site_id='${siteId}'`);
+                await this.deleteData('social_tokens', `platform='facebook' AND userId='${userId}'`);
+                await this.insertData('sm_site_users', {
+                    user_id: userId,
+                    site_id: siteId,
+                    username: slug,
+                    followers: followersCount,
+                    is_verified: 'yes',
+                    link: pageUrl,
+                    created_on: new Date(),
+                    last_synced_at: new Date(),
+                });
+                await this.updateData("users", `user_id='${userId}'`, { is_social_verified: 'yes' });
+            }
+
+            await this.storeSocialTokens('facebook', userId, tokenData as any);
+
+            return this.makeResponse(200, "success", {
+                message: 'Facebook page connected successfully',
+                username: slug,
+                pageUrl,
+                followers: followersCount,
+            });
+        } catch (error) {
+            console.error('Facebook page connection error:', error);
+            return this.makeResponse(500, `Failed to connect Facebook: ${error}`);
         }
     }
 

@@ -34,20 +34,19 @@ class Media extends Model {
       if (file_type === "PROFILE_PIC") {
         files = await Promise.all(
           files.map(async (file) => {
-            // Use file.data instead of file.buffer
             if (file.mimetype !== "image/png") {
               try {
                 const buffer = await sharp(file.data).png().toBuffer();
                 return {
                   ...file,
-                  data: buffer, // update file.data with new buffer
+                  data: buffer,
                   mimetype: "image/png",
-                  // Using file.name (from express-fileupload) instead of file.originalname
-                  name: file.name.replace(/\.[^/.]+$/, ".png")
+                  name: (file.name || "image").replace(/\.[^/.]+$/, ".png")
                 };
               } catch (err) {
-                console.error("Sharp conversion error:", err);
-                throw new Error("Error converting image to PNG");
+                // Sharp can't handle this format (e.g. HEIC, unsupported codec).
+                // Fall through and upload the original — the DB record will still be created.
+                console.warn("Sharp conversion skipped, uploading original:", (err as any)?.message);
               }
             }
             return file;

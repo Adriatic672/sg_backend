@@ -764,7 +764,7 @@ export default class Model extends BaseModel {
                 ...user,
                 ...profileRow,
                 ...(business_profile ? { business_profile } : {}),
-                wallet
+                wallet: wallet || null
             };
             return combinedResult;
         } else {

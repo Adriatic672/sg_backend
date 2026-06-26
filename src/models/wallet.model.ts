@@ -2,7 +2,7 @@ import Model from "../helpers/model";
 import { subscribeToTopic, unsubscribeFromTopic } from '../helpers/FCM';
 import { getItem, setItem } from "../helpers/connectRedis";
 import Stripe from 'stripe';
-import { getUserTier } from '../helpers/subscriptionTier';
+import { getUserTier, setUserTier } from '../helpers/subscriptionTier';
 import RelworxMobileMoney from "../thirdparty/Relworx";
 import GempayProvider from "../thirdparty/Gempay";
 import crypto from 'crypto';
@@ -199,6 +199,63 @@ export default class Payments extends Model {
         return this.makeResponse(404, "Transaction not found");
       }
       const trans_type = transaction[0].trans_type;
+
+      // ── M-Pesa subscription payment callback ───────────────────────────────
+      if (transaction[0].op_type === 'SUBSCRIPTION') {
+        const txn = transaction[0];
+        const isSuccess = status === 'success';
+        const newStatus = isSuccess ? 'SUCCESS' : 'FAILED';
+        await this.callQuerySafe(
+          `UPDATE wl_transactions SET status = ?, system_status = ? WHERE trans_id = ?`,
+          [newStatus, newStatus, customer_reference]
+        );
+
+        if (!isSuccess) {
+          this.sendAppNotification(txn.user_id, 'SUBSCRIPTION_PAYMENT_FAILED', '', txn.amount, 'M-Pesa payment failed', '', 'WALLET');
+          return this.makeResponse(200, 'Subscription payment failed, transaction updated');
+        }
+
+        // Extract sub_tag from narration: "<sub_tag> subscription via M-Pesa"
+        const sub_tag = (txn.narration as string).split(' ')[0];
+
+        const subInfo: any = await this.callQuerySafe(
+          `SELECT * FROM subscriptions WHERE sub_tag = ? LIMIT 1`, [sub_tag]
+        );
+        if (!subInfo || subInfo.length === 0) {
+          logger.error('webhookRel SUBSCRIPTION: sub not found', { sub_tag, trans_id: customer_reference });
+          return this.makeResponse(200, 'Transaction recorded but subscription plan not found');
+        }
+
+        const now = new Date();
+        const startDate = now.toISOString().slice(0, 10);
+        const endDateObj = new Date(now); endDateObj.setDate(endDateObj.getDate() + 30);
+        const endDate = endDateObj.toISOString().slice(0, 10);
+
+        const existingSub: any = await this.callQuerySafe(
+          `SELECT id FROM user_subscriptions WHERE user_id = ? AND subscription_id = ? LIMIT 1`,
+          [txn.user_id, subInfo[0].id]
+        );
+        if (existingSub && existingSub.length > 0) {
+          await this.callQuerySafe(
+            `UPDATE user_subscriptions SET status = 'active', start_date = ?, end_date = ?, auto_renew = 1, updated_at = NOW() WHERE user_id = ? AND subscription_id = ?`,
+            [startDate, endDate, txn.user_id, subInfo[0].id]
+          );
+        } else {
+          await this.callQuerySafe(
+            `INSERT INTO user_subscriptions (user_id, subscription_id, status, start_date, end_date, auto_renew, created_at) VALUES (?, ?, 'active', ?, ?, 1, NOW())`,
+            [txn.user_id, subInfo[0].id, startDate, endDate]
+          );
+        }
+
+        const subTag = (sub_tag as string).toUpperCase();
+        const tier = subTag === 'CREATOR_PRO' ? 'pro' : subTag === 'CREATOR_PLUS' ? 'plus' : null;
+        if (tier) await setUserTier(txn.user_id, tier as any);
+
+        this.sendAppNotification(txn.user_id, 'SUBSCRIPTION_ACTIVATED', '', txn.amount, `${subInfo[0].name} subscription activated`, '', 'WALLET');
+        logger.info('webhookRel SUBSCRIPTION activated', { sub_tag, user_id: txn.user_id, trans_id: customer_reference });
+        return this.makeResponse(200, 'Subscription activated successfully');
+      }
+
       if (trans_type === "DEPOSIT") {
         const updatedStatus = status === "success" ? "success" : "failed";
         const amount = transaction[0].cr_amount;
@@ -1056,10 +1113,21 @@ export default class Payments extends Model {
         return requestPayment
       } else if (paymentMethod == "CARD") {
 
-        const redirectUrl = redirect_url || process.env.WEBSITE_URL || 'https://www.web.socialgems.me/'
-        // const successUrl = `${redirectUrl}payment/?refId=${refId}&status='success'`
-        const successUrl = `${redirectUrl}?refId=${refId}&status='success'`
-        const cancelUrl = `${redirectUrl}?refId=${refId}&status='failed'`
+        const redirectUrl = (redirect_url || process.env.WEBSITE_URL || 'https://www.web.socialgems.me/').replace(/\/$/, '')
+        const successUrl = `${redirectUrl}?refId=${refId}&status=%27success%27`
+        const cancelUrl  = `${redirectUrl}?refId=${refId}&status=%27failed%27`
+
+        // MOCK_STRIPE=true: skip Stripe, credit wallet instantly, return a URL
+        // the Flutter WebView will detect as success without loading any web page.
+        if (String(process.env.MOCK_STRIPE || '').toLowerCase() === 'true') {
+          logger.info(`[Mock Stripe] crediting wallet instantly for refId=${refId}`);
+          await this.completePendingDeposit(refId, amount, 'success');
+          return this.makeResponse(200, 'Mock payment session created', {
+            paymentUrl: `${successUrl}&session_id=${refId}`,
+            sessionId: refId,
+          });
+        }
+
         const cardInfo = {
           sub_tag: "gOjdlNeligy",
           userId: userId,
@@ -1138,24 +1206,28 @@ export default class Payments extends Model {
         case "checkout.session.completed": {
           const session = event.data.object as Stripe.Checkout.Session;
 
-          // Access metadata, userId, and subTag from the session
           const userId = session.metadata?.userId || "";
           const subTag = session.metadata?.subTag || "";
+          const opType = session.metadata?.opType || "";
+          const refId  = session.metadata?.refId  || "";
 
           logger.info(`SESSION_PRO Metadata:`, session.metadata);
 
-          // Retrieve the payment intent ID
           const paymentIntentId = session.payment_intent as string;
-
           logger.info(`Checkout session completed. Payment Intent: ${paymentIntentId}`);
 
-          // Fetch the Payment Intent details
           const paymentIntent = await getStripe().paymentIntents.retrieve(paymentIntentId);
 
           if (paymentIntent.status === "succeeded") {
-            // Credit the user in your system
-            await this.creditUserAccount(userId, paymentIntent.amount / 100, subTag);
-            logger.info(`User ${userId} credited with ${paymentIntent.amount / 100}`);
+            if (opType === "Payment" && refId) {
+              // Wallet deposit — credit the user's wallet balance
+              await this.completePendingDeposit(refId, paymentIntent.amount / 100, "success");
+              logger.info(`Deposit credited: user=${userId} amount=${paymentIntent.amount / 100} refId=${refId}`);
+            } else {
+              // Subscription payment
+              await this.creditUserAccount(userId, paymentIntent.amount / 100, subTag);
+              logger.info(`Subscription credited: user=${userId} amount=${paymentIntent.amount / 100}`);
+            }
           }
           break;
         }
@@ -1794,18 +1866,6 @@ export default class Payments extends Model {
 
       let amount: number;
 
-      // MOCK PAYMENT: If we are in dev/local/debug, skip the real Stripe call
-      if (process.env.ENVIRONMENT !== 'production') {
-        logger.info(`[Mock Payment] Skipping Stripe call for card payment in ${process.env.ENVIRONMENT} mode`);
-        const mockSessionId = `cs_test_${this.getRandomString()}`;
-        const mockPaymentUrl = `${successUrl}?session_id=${mockSessionId}`;
-
-        return this.makeResponse(200, 'Mock payment session created successfully', {
-          paymentUrl: mockPaymentUrl,
-          sessionId: mockSessionId,
-        });
-      }
-
       let currency: string;
       let description: string;
       let subName: string;
@@ -1856,7 +1916,7 @@ export default class Payments extends Model {
           },
         ],
         mode: 'payment',
-        success_url: `${successUrl}?session_id={CHECKOUT_SESSION_ID}`,
+        success_url: `${successUrl}&session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: cancelUrl,
         metadata: {
           userId: userId,

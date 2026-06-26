@@ -4,6 +4,11 @@ import { setItem } from "../helpers/connectRedis";
 import Stripe from 'stripe';
 import { logger } from '../utils/logger';
 import { setUserTier } from '../helpers/subscriptionTier';
+import RelworxMobileMoney from "../thirdparty/Relworx";
+
+function relworx() {
+  return new RelworxMobileMoney();
+}
 
 const mysqlNow = (): string => new Date().toISOString().replace('T', ' ').replace('Z', '').slice(0, 19);
 
@@ -148,7 +153,58 @@ export default class Payments extends Model {
         return this.makeResponse(200, 'Subscription activated successfully');
       }
 
-      // ── Stripe / M-Pesa path ─────────────────────────────────────────────────
+      // ── M-Pesa STK push path (Relworx) ──────────────────────────────────────
+      if (payment_method === 'mpesa') {
+        const phone = userInfo[0].phone;
+        if (!phone) {
+          return this.makeResponse(400, 'No phone number on your account. Please add a phone number first.');
+        }
+        const msisdn = phone.startsWith('+') ? phone : `+${phone}`;
+        const planPrice = parseFloat(subInfo[0].price);
+        const refId = `sub${Date.now().toString(16)}`;
+
+        // Record a pending subscription transaction
+        await this.insertData('wl_transactions', {
+          trans_id: refId,
+          user_id: userId,
+          dr_wallet_id: '0X00000000000',
+          cr_wallet_id: '0X00000000001',
+          trans_type: 'CR',
+          op_type: 'SUBSCRIPTION',
+          status: 'PENDING',
+          system_status: 'PENDING',
+          currency: 'KES',
+          asset: 'KES',
+          amount: planPrice.toFixed(2),
+          narration: `${sub_tag} subscription via M-Pesa`,
+          payment_method: 'mpesa',
+          created_on: mysqlNow(),
+        });
+
+        // Store sub_tag so webhook can activate the right plan
+        await this.insertData('sub_payment_pending', {
+          trans_id: refId,
+          user_id: userId,
+          sub_tag,
+          start_date: startDate,
+          end_date: endDate,
+          created_at: mysqlNow(),
+        }).catch(() => {
+          // Table may not exist yet — fall back to narration lookup in webhook
+        });
+
+        const requestPayment = await relworx().requestPayment(refId, msisdn, 'KES', planPrice, `${subInfo[0].name} subscription`);
+        logger.info('mpesa subscription payment request', { refId, requestPayment });
+
+        if (requestPayment.status !== 200) {
+          await this.updateData('wl_transactions', `trans_id='${refId}'`, { status: 'FAILED', system_status: 'FAILED' });
+          return this.makeResponse(400, requestPayment.message || 'Failed to initiate M-Pesa payment. Please try again.');
+        }
+
+        return this.makeResponse(202, 'M-Pesa prompt sent to your phone. Enter your PIN to complete the subscription.');
+      }
+
+      // ── Stripe card path ─────────────────────────────────────────────────────
       const priceId = subInfo[0].stripe_price_tag;
       const email = userInfo[0].email;
 

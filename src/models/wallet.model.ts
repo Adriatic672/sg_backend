@@ -1276,6 +1276,43 @@ export default class Payments extends Model {
     return currencyInfo[0];
   }
 
+  private async checkBrandWithdrawalBlock(userId: string, currency: string): Promise<string | null> {
+    if (currency.toUpperCase() === 'USD') {
+      // Campaign payouts are always in USD
+      const unpaidCampaigns: any[] = await this.callQuerySafe(
+        `SELECT COUNT(*) AS cnt
+         FROM act_campaign_invites aci
+         JOIN act_campaigns ac ON aci.campaign_id = ac.campaign_id
+         WHERE ac.created_by = ?
+           AND aci.action_status = 'completed'
+           AND aci.pay_status NOT IN ('paid', 'rejected')`,
+        [userId]
+      );
+      const campaignCount = Number(unpaidCampaigns[0]?.cnt ?? 0);
+      if (campaignCount > 0) {
+        return `You have ${campaignCount} completed campaign task(s) with pending influencer payments. Please pay influencers before withdrawing.`;
+      }
+    }
+
+    // Cash job obligations: matched to the job's comp_currency
+    const unpaidJobs: any[] = await this.callQuerySafe(
+      `SELECT COUNT(*) AS cnt
+       FROM jb_job_interests ji
+       JOIN jb_job_posts jp ON ji.job_id = jp.job_id
+       WHERE jp.brand_id = ?
+         AND jp.comp_type = 'cash'
+         AND jp.comp_currency = ?
+         AND ji.status IN ('accepted', 'work_done')`,
+      [userId, currency.toUpperCase()]
+    );
+    const jobCount = Number(unpaidJobs[0]?.cnt ?? 0);
+    if (jobCount > 0) {
+      return `You have ${jobCount} active ${currency.toUpperCase()} cash job(s) with influencers who have not been paid yet. Please complete payments before withdrawing.`;
+    }
+
+    return null;
+  }
+
   async transferRequest(data: any) {
     try {
       console.log("transferRequest", data)
@@ -1359,6 +1396,11 @@ export default class Payments extends Model {
       const pinValidation = await this.validatePin(userId, pin);
       if (pinValidation.status !== 200) {
         return pinValidation;
+      }
+
+      const withdrawalBlock = await this.checkBrandWithdrawalBlock(userId, currency ?? 'USD');
+      if (withdrawalBlock) {
+        return this.makeResponse(400, withdrawalBlock);
       }
 
       const userInfo: any = await this.getUserById(userId);
@@ -1545,6 +1587,12 @@ export default class Payments extends Model {
     // ── 3. Account lock check ──────────────────────────────────────────────
     const lockCheck = await this.isAccountLocked(userId);
     if (lockCheck !== false) return lockCheck;
+
+    // ── 3b. Brand withdrawal block: unpaid influencer obligations ──────────
+    const withdrawalBlock = await this.checkBrandWithdrawalBlock(userId, 'KES');
+    if (withdrawalBlock) {
+      return this.makeResponse(400, withdrawalBlock);
+    }
 
     // ── 4. KES wallet + available balance check ────────────────────────────
     await this.getUserWallet(userId, 'KES');

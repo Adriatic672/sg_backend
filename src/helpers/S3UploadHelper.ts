@@ -1,4 +1,5 @@
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import ThumbnailHelper from './ThumbnailHelper';
 
@@ -24,8 +25,8 @@ if (useAwsInProduction) {
   });
 }
 
-// Local mock storage path for development
-export const MOCK_UPLOAD_DIR = path.join(process.cwd(), '..', 'social_gems_uploads');
+// Local mock storage path for development — use /tmp so it's always writable
+export const MOCK_UPLOAD_DIR = path.join(os.tmpdir(), 'social_gems_uploads');
 // Force mock in development, or if credentials are missing in production (fallback)
 const USE_MOCK = !useAwsInProduction;
 
@@ -54,13 +55,9 @@ interface FileUpload {
  * Saves file to local mock storage (development only)
  */
 const saveToLocalMock = (fileData: Buffer, folderName: string, fileName: string): string => {
-  const folderPath = path.join(MOCK_UPLOAD_DIR, folderName);
-  if (!fs.existsSync(folderPath)) {
-    fs.mkdirSync(folderPath, { recursive: true });
-  }
-  
-  const filePath = path.join(folderPath, fileName);
-  // Write file using fs.writeFileSync (bypassing strict type check)
+  const filePath = path.join(MOCK_UPLOAD_DIR, folderName, fileName);
+  // Create all parent directories, including any subdirs embedded in fileName (e.g. "dps/userid_hash.png")
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, fileData as any);
   
   // Return a mock URL that points to our local server

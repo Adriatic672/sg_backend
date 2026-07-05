@@ -17,7 +17,9 @@
     "migrate": "ts-node src/db/migrate.ts migrate",
     "migrate:status": "ts-node src/db/migrate.ts status",
     "migrate:rollback": "ts-node src/db/migrate.ts rollback",
-    "create:super-admin": "ts-node src/scripts/create-super-admin.ts"
+    "create:super-admin": "ts-node src/scripts/create-super-admin.ts",
+    "reset:super-admin": "ts-node src/scripts/reset-super-admin.ts",
+    "seed:demo": "ts-node src/scripts/seed-demo.ts"
   },
   "keywords": [],
   "author": "",

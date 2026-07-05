@@ -157,6 +157,18 @@ export default class JobBoard extends Model {
       }
     }
 
+    if (status === "active" && comp_type === "cash" && comp_amount > 0) {
+      const walletAsset = (comp_currency ?? "KES").toUpperCase();
+      const walletRow: any[] = await this.callQuerySafe(
+        `SELECT balance_available FROM user_wallets WHERE user_id = ? AND asset = ? AND status = 'active' LIMIT 1`,
+        [userId, walletAsset]
+      );
+      const available = parseFloat(walletRow[0]?.balance_available ?? "0") || 0;
+      if (available < comp_amount) {
+        return this.makeResponse(400, `Insufficient wallet balance to post this job. You need ${walletAsset} ${comp_amount} but have ${walletAsset} ${available.toFixed(2)} available. Please top up your wallet.`);
+      }
+    }
+
     const job_id = this.getRandomString();
     const access_tier = await this.deriveConfiguredJobAccessTier(comp_type, comp_amount);
     await this.insertData("jb_job_posts", {

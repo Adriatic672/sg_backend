@@ -3,34 +3,46 @@ import os from 'os';
 import path from 'path';
 import ThumbnailHelper from './ThumbnailHelper';
 
-// Check if AWS credentials are configured
-const accessKeyId = process.env.AWS_ACCESS_KEY_ID?.trim();
+// ─── Cloudinary ───────────────────────────────────────────────────────────────
+const cloudinaryCloudName = process.env.CLOUDINARY_CLOUD_NAME?.trim();
+const cloudinaryApiKey    = process.env.CLOUDINARY_API_KEY?.trim();
+const cloudinaryApiSecret = process.env.CLOUDINARY_API_SECRET?.trim();
+
+const hasCloudinaryCredentials = !!(cloudinaryCloudName && cloudinaryApiKey && cloudinaryApiSecret);
+
+let cloudinary: any = null;
+if (hasCloudinaryCredentials) {
+  const { v2 } = require('cloudinary');
+  cloudinary = v2;
+  cloudinary.config({
+    cloud_name: cloudinaryCloudName,
+    api_key:    cloudinaryApiKey,
+    api_secret: cloudinaryApiSecret,
+    secure:     true,
+  });
+  console.log('[Cloudinary] Configured — uploads will use Cloudinary');
+}
+
+// ─── AWS S3 (kept for future migration) ───────────────────────────────────────
+const accessKeyId     = process.env.AWS_ACCESS_KEY_ID?.trim();
 const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY?.trim();
-const region = process.env.AWS_REGION?.trim();
+const region          = process.env.AWS_REGION?.trim();
 
-const hasAWSCredentials = !!(accessKeyId && secretAccessKey && accessKeyId.length > 0);
+const hasAWSCredentials  = !!(accessKeyId && secretAccessKey && accessKeyId.length > 0);
+const isProduction       = process.env.ENVIRONMENT === 'production';
+const useAwsInProduction = !hasCloudinaryCredentials && isProduction && hasAWSCredentials;
 
-// Conditionally load AWS SDK only when needed
-const isProduction = process.env.ENVIRONMENT === 'production';
-const useAwsInProduction = isProduction && hasAWSCredentials;
-
-// Only import AWS S3 when actually needed in production
 let s3: any = null;
 if (useAwsInProduction) {
   const AWS = require('aws-sdk');
-  s3 = new AWS.S3({
-    accessKeyId,
-    secretAccessKey,
-    region,
-  });
+  s3 = new AWS.S3({ accessKeyId, secretAccessKey, region });
+  console.log('[S3] Configured — uploads will use AWS S3');
 }
 
-// Local mock storage path for development — use /tmp so it's always writable
+// ─── Mock (local dev / fallback) ──────────────────────────────────────────────
 export const MOCK_UPLOAD_DIR = path.join(os.tmpdir(), 'social_gems_uploads');
-// Force mock in development, or if credentials are missing in production (fallback)
-const USE_MOCK = !useAwsInProduction;
+const USE_MOCK = !hasCloudinaryCredentials && !useAwsInProduction;
 
-// Ensure mock upload directory exists
 if (USE_MOCK) {
   if (!fs.existsSync(MOCK_UPLOAD_DIR)) {
     fs.mkdirSync(MOCK_UPLOAD_DIR, { recursive: true });
@@ -38,6 +50,7 @@ if (USE_MOCK) {
   console.log(`[S3Mock] Using local storage at: ${MOCK_UPLOAD_DIR}`);
 }
 
+// ─── Types ────────────────────────────────────────────────────────────────────
 interface UploadResponse {
   url: string;
   key: string;
@@ -51,189 +64,175 @@ interface FileUpload {
   mimetype: string;
 }
 
-/**
- * Saves file to local mock storage (development only)
- */
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 const saveToLocalMock = (fileData: Buffer, folderName: string, fileName: string): string => {
   const filePath = path.join(MOCK_UPLOAD_DIR, folderName, fileName);
-  // Create all parent directories, including any subdirs embedded in fileName (e.g. "dps/userid_hash.png")
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, fileData as any);
-  
-  // Return a mock URL that points to our local server
   const mockUrl = `${process.env.DOMAIN || 'http://localhost:3005'}/mock-upload/${folderName}/${fileName}`;
   return mockUrl;
 };
 
-/**
- * Uploads a file to S3 and returns CDN URL.
- * Falls back to local mock storage if AWS credentials are not configured.
- */
-export const uploadToS3 = async (file: FileUpload, folderName: string, fileTitle: string = ''): Promise<UploadResponse> => {
-  try {
-    // Generate a unique file name for the S3 bucket
-    const fileName = file.name || "";
-    const fileExtension = fileName.split('.').pop();
-
-    const randomFileName = fileTitle === ''
-      ? `${Date.now()}-${Math.random().toString(36).substr(2, 9)}.${fileExtension}`
-      : `${fileTitle}.${fileExtension}`;
-
-    if (isProduction && !s3) {
-      throw new Error("AWS Credentials are required in production. S3 upload failed.");
-    }
-
-    // Use mock storage if AWS credentials are not configured
-    if (USE_MOCK || !s3) {
-      console.log(`[S3Mock] Uploading ${randomFileName} to local mock storage`);
-      const mockUrl = saveToLocalMock(file.data, folderName, randomFileName);
-      return {
-        url: mockUrl,
-        key: `${folderName}/${randomFileName}`,
-        originalUrl: mockUrl
-      };
-    }
-
-    const params = {
-      Bucket: process.env.AWS_S3_BUCKET_NAME as string,
-      Key: `${folderName}/${randomFileName}`,
-      Body: file.data,
-      ContentType: file.mimetype
+const uploadBufferToCloudinary = (
+  buffer: Buffer,
+  mimetype: string,
+  folder: string,
+  publicId?: string
+): Promise<any> => {
+  return new Promise((resolve, reject) => {
+    const options: any = {
+      folder,
+      resource_type: mimetype.startsWith('video/') ? 'video' : 'auto',
     };
+    if (publicId) options.public_id = publicId;
 
-    // Upload the file to S3
-    const data = await s3.upload(params).promise();
-
-    // Convert S3 URL to CDN URL
-    const cdnUrl = getCDNUrl(data.Location);
-
-    return {
-      url: cdnUrl,
-      key: data.Key,
-      originalUrl: data.Location
-    };
-  } catch (error) {
-    if (isProduction) console.error(`[S3-Error] Upload failed in production. Has Credentials: ${!!s3}, Bucket: ${process.env.AWS_S3_BUCKET_NAME}`);
-    console.error('Error uploading to S3:', error);
-    throw new Error('Error uploading file to S3');
-  }
+    const stream = cloudinary.uploader.upload_stream(options, (error: any, result: any) => {
+      if (error) reject(error);
+      else resolve(result);
+    });
+    stream.end(buffer);
+  });
 };
 
-/**
- * Converts an S3 URL to a CDN URL based on environment
- */
 export const getCDNUrl = (url: string): string => {
   if (!url) return '';
-  
-  const isProd = process.env.TABLE_IDENTIFIER === 'prod';
+  const isProd  = process.env.TABLE_IDENTIFIER === 'prod';
   const isStage = process.env.TABLE_IDENTIFIER === 'stage';
   let cdnUrl = url;
-  
   if (isStage) {
     cdnUrl = url.replace('social-gems.s3.amazonaws.com', 'sg-cdn.tekjuice.xyz');
   } else if (isProd) {
     cdnUrl = url.replace('sg-live.s3.amazonaws.com', 'd2alpkzffyryvp.cloudfront.net');
   }
-  
   return cdnUrl;
 };
 
-/**
- * Uploads a file and its thumbnail to S3, returning CDN URLs.
- * Falls back to local mock storage if AWS credentials are not configured.
- */
-export const uploadWithThumbnail = async (file: FileUpload, folderName: string, fileTitle: string = ''): Promise<UploadResponse> => {
+// ─── uploadToS3 ───────────────────────────────────────────────────────────────
+export const uploadToS3 = async (
+  file: FileUpload,
+  folderName: string,
+  fileTitle: string = ''
+): Promise<UploadResponse> => {
   try {
-    // Extract file info
-    const fileName = file.name || "";
+    const fileName      = file.name || '';
     const fileExtension = fileName.split('.').pop();
-    const baseName = fileTitle === ''
+    const randomName    = fileTitle === ''
       ? `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
       : fileTitle;
+    const fullFileName  = `${randomName}.${fileExtension}`;
 
-    // Create final filenames
-    const mainFileName = `${baseName}.${fileExtension}`;
-    const thumbnailFileName = `${baseName}_thumbnail.jpg`;
-
-    // Generate thumbnail if it's an image
-    let thumbnailBuffer;
-    try {
-      thumbnailBuffer = await new ThumbnailHelper().generateThumbnail(
+    // ── Cloudinary ──
+    if (hasCloudinaryCredentials && cloudinary) {
+      const result = await uploadBufferToCloudinary(
         file.data,
-        300,
-        fileExtension
+        file.mimetype,
+        folderName,
+        randomName
       );
-    } catch (err) {
-      console.error('Thumbnail generation error:', err);
-      thumbnailBuffer = null;
+      return { url: result.secure_url, key: result.public_id, originalUrl: result.url };
     }
 
-    if (isProduction && !s3) {
-      throw new Error("AWS Credentials are required in production. S3 upload failed.");
-    }
-
-    // Use mock storage if AWS credentials are not configured
-    if (USE_MOCK || !s3) {
-      console.log(`[S3Mock] Uploading ${mainFileName} with thumbnail to local mock storage`);
-      
-      const mainUrl = saveToLocalMock(file.data, folderName, mainFileName);
-      let thumbnailUrl = null;
-      
-      if (thumbnailBuffer) {
-        thumbnailUrl = saveToLocalMock(thumbnailBuffer, folderName, thumbnailFileName);
-      }
-      
-      return {
-        url: mainUrl,
-        key: `${folderName}/${mainFileName}`,
-        originalUrl: mainUrl,
-        thumbnail: thumbnailUrl || undefined
+    // ── AWS S3 ──
+    if (useAwsInProduction && s3) {
+      const params = {
+        Bucket:      process.env.AWS_S3_BUCKET_NAME as string,
+        Key:         `${folderName}/${fullFileName}`,
+        Body:        file.data,
+        ContentType: file.mimetype,
       };
+      const data   = await s3.upload(params).promise();
+      const cdnUrl = getCDNUrl(data.Location);
+      return { url: cdnUrl, key: data.Key, originalUrl: data.Location };
     }
 
-    // Upload original file to S3
-    const mainFileParams = {
-      Bucket: process.env.AWS_S3_BUCKET_NAME as string,
-      Key: `${folderName}/${mainFileName}`,
-      Body: file.data,
-      ContentType: file.mimetype
-    };
-
-    const mainUpload = await s3.upload(mainFileParams).promise();
-    let thumbnailUrl = null;
-
-    // Upload thumbnail if we were able to generate one
-    if (thumbnailBuffer) {
-      const thumbnailParams = {
-        Bucket: process.env.AWS_S3_BUCKET_NAME as string,
-        Key: `${folderName}/${thumbnailFileName}`,
-        Body: thumbnailBuffer,
-        ContentType: 'image/jpeg'
-      };
-
-      const thumbnailUpload = await s3.upload(thumbnailParams).promise();
-      thumbnailUrl = thumbnailUpload.Location;
+    if (isProduction) {
+      throw new Error('No upload provider configured in production.');
     }
 
-    // Convert S3 URLs to CDN URLs using centralized function
-    const cdnUrl = getCDNUrl(mainUpload.Location);
-    const cdnThumbnailUrl = thumbnailUrl ? getCDNUrl(thumbnailUrl) : null;
+    // ── Mock ──
+    const mockUrl = saveToLocalMock(file.data, folderName, fullFileName);
+    return { url: mockUrl, key: `${folderName}/${fullFileName}`, originalUrl: mockUrl };
 
-    return {
-      url: cdnUrl,
-      key: mainUpload.Key,
-      originalUrl: mainUpload.Location,
-      thumbnail: cdnThumbnailUrl || undefined
-    };
   } catch (error) {
-    if (isProduction) console.error(`[S3-Error] Upload with thumbnail failed. Has Credentials: ${!!s3}`);
-    console.error('Error uploading with thumbnail:', error);
-    throw new Error('Error uploading file with thumbnail to S3');
+    console.error('Error uploading file:', error);
+    throw new Error('Error uploading file');
   }
 };
 
-export default {
-  uploadToS3,
-  uploadWithThumbnail,
-  getCDNUrl
+// ─── uploadWithThumbnail ──────────────────────────────────────────────────────
+export const uploadWithThumbnail = async (
+  file: FileUpload,
+  folderName: string,
+  fileTitle: string = ''
+): Promise<UploadResponse> => {
+  try {
+    const fileName      = file.name || '';
+    const fileExtension = fileName.split('.').pop();
+    const baseName      = fileTitle === ''
+      ? `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+      : fileTitle;
+    const mainFileName      = `${baseName}.${fileExtension}`;
+    const thumbnailFileName = `${baseName}_thumbnail.jpg`;
+
+    // ── Cloudinary — thumbnail via URL transformation (no extra upload needed) ──
+    if (hasCloudinaryCredentials && cloudinary) {
+      const result     = await uploadBufferToCloudinary(file.data, file.mimetype, folderName, baseName);
+      const mainUrl    = result.secure_url as string;
+      // Generate thumbnail URL using Cloudinary's on-the-fly transformations
+      const thumbUrl   = mainUrl.replace('/upload/', '/upload/w_300,h_300,c_fill,f_jpg/');
+      return { url: mainUrl, key: result.public_id, originalUrl: result.url, thumbnail: thumbUrl };
+    }
+
+    // ── AWS S3 — generate thumbnail manually then upload separately ──
+    let thumbnailBuffer: Buffer | null = null;
+    try {
+      thumbnailBuffer = await new ThumbnailHelper().generateThumbnail(file.data, 300, fileExtension);
+    } catch (err) {
+      console.error('Thumbnail generation error:', err);
+    }
+
+    if (useAwsInProduction && s3) {
+      const mainParams = {
+        Bucket:      process.env.AWS_S3_BUCKET_NAME as string,
+        Key:         `${folderName}/${mainFileName}`,
+        Body:        file.data,
+        ContentType: file.mimetype,
+      };
+      const mainUpload = await s3.upload(mainParams).promise();
+
+      let thumbnailUrl: string | null = null;
+      if (thumbnailBuffer) {
+        const thumbParams = {
+          Bucket:      process.env.AWS_S3_BUCKET_NAME as string,
+          Key:         `${folderName}/${thumbnailFileName}`,
+          Body:        thumbnailBuffer,
+          ContentType: 'image/jpeg',
+        };
+        const thumbUpload = await s3.upload(thumbParams).promise();
+        thumbnailUrl      = thumbUpload.Location;
+      }
+
+      const cdnUrl      = getCDNUrl(mainUpload.Location);
+      const cdnThumbUrl = thumbnailUrl ? getCDNUrl(thumbnailUrl) : null;
+      return { url: cdnUrl, key: mainUpload.Key, originalUrl: mainUpload.Location, thumbnail: cdnThumbUrl || undefined };
+    }
+
+    if (isProduction) {
+      throw new Error('No upload provider configured in production.');
+    }
+
+    // ── Mock ──
+    const mainUrl = saveToLocalMock(file.data, folderName, mainFileName);
+    let thumbUrl: string | undefined;
+    if (thumbnailBuffer) {
+      thumbUrl = saveToLocalMock(thumbnailBuffer, folderName, thumbnailFileName);
+    }
+    return { url: mainUrl, key: `${folderName}/${mainFileName}`, originalUrl: mainUrl, thumbnail: thumbUrl };
+
+  } catch (error) {
+    console.error('Error uploading file with thumbnail:', error);
+    throw new Error('Error uploading file with thumbnail');
+  }
 };
+
+export default { uploadToS3, uploadWithThumbnail, getCDNUrl };

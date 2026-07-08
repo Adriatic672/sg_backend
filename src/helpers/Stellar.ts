@@ -68,7 +68,7 @@ export class Stellar extends BaseModel {
         const airdropSecret = process.env.AIRDROP_SECRET;
         this.issuerPv = process.env.ISSUER_PV || '';
         if (!airdropSecret) {
-            if (process.env.ENVIRONMENT === 'production') {
+            if (process.env.ENVIRONMENT === 'production' && !MOCK_MODE) {
                 throw new Error('AIRDROP_SECRET environment variable is not set');
             } else {
                 console.warn('[StellarMock] Running without AIRDROP_SECRET. Using random keypair.');

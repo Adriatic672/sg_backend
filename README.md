@@ -2,13 +2,6 @@
 
 Backend service for the SocialGems platform (agents, campaigns, influencer search and validation).
 
----
-
-## Environments & URLs
-
-- **API base URL (staging)**: https://gems.tekjuice.xyz
-- **Web panel (brands/agents)**: https://sg-web.tekjuice.xyz/login
-- **Admin panel**: https://sg-admin.tekjuice.xyz/login/
 
 ---
 
@@ -51,6 +44,4 @@ For full endpoint details and example requests, use the Postman collection:
 - [SocialGems Postman Documentation](https://documenter.getpostman.com/view/3143535/2sAXxPACoK)
 
 In Postman, set:
-
-- `baseUrl` → `https://gems.tekjuice.xyz` (or your local API URL)
 - Auth/environment variables (e.g. `agentJWT`, `agentId`, `businessId`) according to the flows described in `AGENT_SETUP_GUIDE.md` and `AGENTS_API_ENDPOINTS.md`.

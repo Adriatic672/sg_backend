@@ -925,7 +925,7 @@ INNER JOIN users_profile p ON u.user_id = p.user_id`);
       // Log the operation
       this.logOperation("deleteAccount", userId, influencer_id, { email, reason });
 
-      this.beginTransaction();
+      await this.beginTransaction();
 
       // Execute the actual deletion
       await this.callQuerySafe(`DELETE FROM users WHERE user_id = ?`, [influencer_id]);
@@ -970,7 +970,7 @@ INNER JOIN users_profile p ON u.user_id = p.user_id`);
     saveDeleteUser.deleted_by = userId;
     saveDeleteUser.deleted_at = new Date()
     try {
-      this.beginTransaction()
+      await this.beginTransaction()
       // await this.insertData("deleted_users", saveDeleteUser)
       await this.callQuerySafe(`DELETE FROM users WHERE user_id = '${business_id}'`);
       await this.callQuerySafe(`DELETE FROM sm_site_users WHERE user_id = '${business_id}'`);

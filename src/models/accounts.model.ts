@@ -1003,6 +1003,7 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
 
       const existingUsers: any = await this.getUserByEmail(email);
       if (existingUsers.length > 0) {
+        await this.rollbackTransaction();
         return this.makeResponse(400, "Email already exists");
       }
 
@@ -1071,6 +1072,7 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
           const refererUser = await this.getUserByReferralCode(referral_code);
 
           if (refererUser.length === 0) {
+            await this.rollbackTransaction();
             return this.makeResponse(400, "Invalid referral code");
           }
 
@@ -1084,7 +1086,7 @@ By clicking "Yes, reactivate", you will halt the deactivation`;
           };
           await this.insertData("referrals", referralData);
           if (gems > 0) {
-            this.rewardGems(refererUserId, gems, 'REFERRAL_BONUS');
+            await this.rewardGems(refererUserId, gems, 'REFERRAL_BONUS');
           }
 
         } catch (error) {

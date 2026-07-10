@@ -257,7 +257,7 @@ class Agents extends Model {
         created_by: finalBusinessId
       };
 
-      this.beginTransaction()
+      await this.beginTransaction()
       await this.insertData("act_campaigns", newCampaign);
 
       try {
@@ -284,11 +284,11 @@ class Agents extends Model {
           }
           const allowedRequeiredTypes = ['yes', 'no'];
           if (!allowedRequeiredTypes.includes(task.requires_url)) {
-            this.rollbackTransaction()
+            await this.rollbackTransaction()
             return this.makeResponse(400, "Invalid requires_url type for one of the tasks, should be yes or no");
           }
           if (!allowedRequeiredTypes.includes(task.is_repetitive)) {
-            this.rollbackTransaction()
+            await this.rollbackTransaction()
             return this.makeResponse(400, "Invalid repetitive type for one of the tasks, should be yes or no");
           }
 
@@ -312,11 +312,11 @@ class Agents extends Model {
           await this.insertData("act_tasks", newTask);
         }
       } catch (error) {
-        this.rollbackTransaction()
+        await this.rollbackTransaction()
         return this.makeResponse(400, "Tasks object not properly formulated");
       }
 
-      this.commitTransaction()
+      await this.commitTransaction()
 
 
       if (requestId) {
@@ -325,7 +325,7 @@ class Agents extends Model {
 
       return this.makeResponse(200, "Campaign added successfully", newCampaign);
     } catch (error) {
-      this.rollbackTransaction()
+      await this.rollbackTransaction()
       console.error("Error in createCampaign:", error);
       return this.makeResponse(500, "Error adding campaign");
     }

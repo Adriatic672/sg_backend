@@ -1734,7 +1734,7 @@ WHERE campaign_id = '${campaign_id}'`);
 
       const oneDay = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 19).replace('T', ' ')
       //set expiry of the campaign to be 24hrs
-      this.beginTransaction();
+      await this.beginTransaction();
 
       const allInfluencers = eligibleUsers
       let amountToPay = 0;
@@ -1785,6 +1785,7 @@ WHERE campaign_id = '${campaign_id}'`);
       logger.info("transferObj", transferObj)
       const status = transferObj.status
       if (status != 200) {
+        await this.rollbackTransaction();
         return transferObj;
       }
 
@@ -1793,10 +1794,10 @@ WHERE campaign_id = '${campaign_id}'`);
       const budgetUpdate = { status: "open_to_applications", budget: budget, published_date: published_date, funding_status: 'funded', funded_amount: budget };
       await this.updateData("act_campaigns", `campaign_id = '${campaign_id}'`, budgetUpdate);
 
-      this.commitTransaction();
+      await this.commitTransaction();
       return this.makeResponse(200, "Request successful");
     } catch (error) {
-      this.rollbackTransaction();
+      await this.rollbackTransaction();
       console.error("Error in inviteUsers:", error);
       return this.makeResponse(500, "Error sending invites");
     }
@@ -1895,7 +1896,7 @@ WHERE campaign_id = '${campaign_id}'`);
 
       const oneDay = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 19).replace('T', ' ')
       //set expiry of the campaign to be 24hrs
-      this.beginTransaction();
+      await this.beginTransaction();
 
       const allInfluencers = [...eligibleUsers, ...otherEligibleUsers];
       let amountToPay = 0;
@@ -1938,6 +1939,7 @@ WHERE campaign_id = '${campaign_id}'`);
       logger.info("transferObj", transferObj)
       const status = transferObj.status
       if (status != 200) {
+        await this.rollbackTransaction();
         return transferObj;
       }
 
@@ -1948,10 +1950,10 @@ WHERE campaign_id = '${campaign_id}'`);
       const budgetUpdate = { status: "open_to_applications", published_date: published_date, funding_status: 'funded', funded_amount: amountToPay };
       await this.updateData("act_campaigns", `campaign_id = '${campaign_id}'`, budgetUpdate);
 
-      this.commitTransaction();
+      await this.commitTransaction();
       return this.makeResponse(200, "Request successful");
     } catch (error) {
-      this.rollbackTransaction();
+      await this.rollbackTransaction();
       console.error("Error in inviteUsers:", error);
       return this.makeResponse(500, "Error sending invites");
     }
@@ -2072,7 +2074,7 @@ WHERE campaign_id = '${campaign_id}'`);
     };
 
     try {
-      this.beginTransaction();
+      await this.beginTransaction();
 
       // Process accepted applications
       if (accepted_applications.length > 0) {
@@ -2118,7 +2120,7 @@ WHERE campaign_id = '${campaign_id}'`);
         }
       }
 
-      this.commitTransaction();
+      await this.commitTransaction();
 
       const getApprovedInfluencers2 = await this.getApprovedInfluencers(campaign_id)
       const approvedInfluencers2 = getApprovedInfluencers2.data.length
@@ -2130,7 +2132,7 @@ WHERE campaign_id = '${campaign_id}'`);
       this.updateCampaignCounters(campaign_id);
       return this.makeResponse(200, "Applications processed successfully", results);
     } catch (error) {
-      this.rollbackTransaction();
+      await this.rollbackTransaction();
       console.error("Error in batchProcessApplications:", error);
       return this.makeResponse(500, "Error processing applications");
     }
@@ -2315,7 +2317,7 @@ WHERE campaign_id = '${campaign_id}'`);
       if (isAffiliate && commission_type) newCampaign.commission_type = commission_type;
       if (isAffiliate && commission_value) newCampaign.commission_value = parseFloat(commission_value);
 
-      this.beginTransaction()
+      await this.beginTransaction()
       await this.insertData("act_campaigns", newCampaign);
 
       try {
@@ -2342,11 +2344,11 @@ WHERE campaign_id = '${campaign_id}'`);
           }
           const allowedRequeiredTypes = ['yes', 'no'];
           if (!allowedRequeiredTypes.includes(task.requires_url)) {
-            this.rollbackTransaction()
+            await this.rollbackTransaction()
             return this.makeResponse(400, "Invalid requires_url type for one of the tasks, should be yes or no");
           }
           if (!allowedRequeiredTypes.includes(task.is_repetitive)) {
-            this.rollbackTransaction()
+            await this.rollbackTransaction()
             return this.makeResponse(400, "Invalid repetitive type for one of the tasks, should be yes or no");
           }
 
@@ -2370,11 +2372,11 @@ WHERE campaign_id = '${campaign_id}'`);
           await this.insertData("act_tasks", newTask);
         }
       } catch (error) {
-        this.rollbackTransaction()
+        await this.rollbackTransaction()
         return this.makeResponse(400, "Tasks object not properly formulated");
       }
 
-      this.commitTransaction()
+      await this.commitTransaction()
 
 
       if (requestId) {
@@ -2383,7 +2385,7 @@ WHERE campaign_id = '${campaign_id}'`);
 
       return this.makeResponse(200, "Campaign added successfully", newCampaign);
     } catch (error) {
-      this.rollbackTransaction()
+      await this.rollbackTransaction()
       console.error("Error in createCampaign:", error);
       return this.makeResponse(500, "Error adding campaign");
     }
@@ -2505,7 +2507,7 @@ WHERE campaign_id = '${campaign_id}'`);
       };
       if (affiliate_link !== undefined) updatedCampaign.affiliate_link = affiliate_link;
 
-      this.beginTransaction()
+      await this.beginTransaction()
       const result = await this.updateData("act_campaigns", `campaign_id = '${campaign_id}'`, updatedCampaign);
       if (!result) {
         throw new Error("Campaign not updated");
@@ -2535,11 +2537,11 @@ WHERE campaign_id = '${campaign_id}'`);
           }
           const allowedRequeiredTypes = ['yes', 'no'];
           if (!allowedRequeiredTypes.includes(task.requires_url)) {
-            this.rollbackTransaction()
+            await this.rollbackTransaction()
             return this.makeResponse(400, "Invalid requires_url type for one of the tasks, should be yes or no");
           }
           if (!allowedRequeiredTypes.includes(task.is_repetitive)) {
-            this.rollbackTransaction()
+            await this.rollbackTransaction()
             return this.makeResponse(400, "Invalid repetitive type for one of the tasks, should be yes or no");
           }
 
@@ -2564,7 +2566,7 @@ WHERE campaign_id = '${campaign_id}'`);
         }
       } catch (error) {
         logger.error("Error in updateCampaign:", error)
-        this.rollbackTransaction()
+        await this.rollbackTransaction()
         return this.makeResponse(400, "Tasks object not properly formulated");
       }
 
@@ -2572,11 +2574,11 @@ WHERE campaign_id = '${campaign_id}'`);
         await this.updateData("elig_searches", `search_id = '${requestId}'`, { campaign_id: campaign_id });
       }
 
-      this.commitTransaction()
+      await this.commitTransaction()
 
       return this.makeResponse(200, "Campaign updated successfully", updatedCampaign);
     } catch (error) {
-      this.rollbackTransaction()
+      await this.rollbackTransaction()
       console.error("Error in updateCampaign:", error);
       return this.makeResponse(500, "Error updating campaign");
     }

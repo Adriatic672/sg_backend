@@ -319,7 +319,7 @@ class BaseModel {
 
   public async beginTransaction() {
     try {
-      await db.default.pdo('START TRANSACTION;');
+      await db.default.beginTransaction();
     } catch (error) {
       logger.error("beginTransaction", error);
       throw error;
@@ -328,7 +328,7 @@ class BaseModel {
 
   public async commitTransaction() {
     try {
-      await db.default.pdo('COMMIT;');
+      await db.default.commit();
     } catch (error) {
       logger.error("commitTransaction", error);
       throw error;
@@ -337,7 +337,7 @@ class BaseModel {
 
   public async rollbackTransaction() {
     try {
-      await db.default.pdo('ROLLBACK;');
+      await db.default.rollback();
     } catch (error) {
       logger.error("rollbackTransaction", error);
       throw error;

@@ -743,10 +743,10 @@ export default class JobBoard extends Model {
     // Send a chat message to the creator
     try {
       const brandQuery: any[] = await this.callQuerySafe(
-        `SELECT business_name FROM business_profile WHERE business_id = ? LIMIT 1`,
+        `SELECT name FROM business_profile WHERE business_id = ? LIMIT 1`,
         [userId]
       );
-      const brandName = brandQuery.length > 0 ? brandQuery[0].business_name : "Brand";
+      const brandName = brandQuery.length > 0 ? brandQuery[0].name : "Brand";
 
       const chatModel = new ChatModel();
       await chatModel.sendMessage({

@@ -991,10 +991,10 @@ WHERE i.user_id = '${userId}' AND i.invite_status = '${status}' AND i.applicatio
   }
 
   async trackAffiliateClick(campaignId: string, userId: string) {
-    await this.insertData(
-      'INSERT INTO affiliate_clicks (campaign_id, user_id) VALUES (?, ?)',
-      [campaignId, userId]
-    );
+    await this.insertData('affiliate_clicks', {
+      campaign_id: campaignId,
+      user_id: userId,
+    });
     return this.makeResponse(200, "success", { message: "Click tracked" });
   }
 
@@ -3715,10 +3715,11 @@ WHERE campaign_id = '${campaign_id}'`);
       }
 
       const refCode = crypto.randomBytes(6).toString('hex');
-      await this.insertData(
-        'INSERT INTO campaign_affiliate_members (campaign_id, user_id, ref_code) VALUES (?, ?, ?)',
-        [campaignId, userId, refCode]
-      );
+      await this.insertData('campaign_affiliate_members', {
+        campaign_id: campaignId,
+        user_id: userId,
+        ref_code: refCode,
+      });
       const trackingUrl = `${baseUrl}/campaigns/affiliate-redirect/${refCode}`;
       return this.makeResponse(200, 'Joined successfully', {
         ref_code: refCode,

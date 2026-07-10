@@ -700,7 +700,7 @@ export default class Model extends BaseModel {
             const profile: any = await this.callQuerySafe(`SELECT first_name,username FROM users_profile WHERE user_id='${userId}'`);
             return profile.length > 0 ? profile[0].first_name || profile[0].username : "";
         } else {
-            const profile: any = await this.callQuerySafe(`SELECT business_name FROM business_profile WHERE owner_id='${userId}'`);
+            const profile: any = await this.callQuerySafe(`SELECT name FROM business_profile WHERE owner_id='${userId}'`);
             return profile.length > 0 ? profile[0].name : "";
         }
 

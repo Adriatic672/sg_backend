@@ -2,3 +2,12 @@ node_modules/
 .env
 logs/
 dist/
+
+# Accidental AI-chat/credential pastes - keep locally, never commit
+Did you save your OAuth 2.md
+LKEatxdcURmq2kyXyfHvZIBrO.md
+Now I have the full picture.md
+Untitled-1.md
+Untitled-2.txt
+Untitled-*.md
+Untitled-*.txt

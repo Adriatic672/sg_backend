@@ -11,3 +11,8 @@ Untitled-1.md
 Untitled-2.txt
 Untitled-*.md
 Untitled-*.txt
+All changes are done. Here's a full summ. Here's a full summ. Here's a full summ
+
+# Local agent config / OS junk - never commit
+.claude/
+.DS_Store
